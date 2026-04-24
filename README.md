@@ -1,11 +1,15 @@
-# PNG Tools
+# Game Tools
 
-一个轻量的图片背景抠除工具。默认处理 `input/` 目录里的图片，并把透明背景 PNG 输出到 `output/`。
+一个游戏开发中用到的小工具。
+包括:
+- 轻量的图片背景抠除工具。默认处理 `input/` 目录里的图片，并把透明背景 PNG 输出到 `output/`。
 
 ## 安装
 
 ```bash
 python3 -m pip install -r requirements.txt
+
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## 使用
