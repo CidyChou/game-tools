@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 from collections import deque
+from itertools import chain
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -11,6 +12,8 @@ from PIL import Image
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+Pixel = tuple[int, int, int, int]
+PixelMatcher = Callable[[Pixel], bool]
 
 
 def parse_color(value: str) -> tuple[int, int, int]:
@@ -38,21 +41,98 @@ def parse_color(value: str) -> tuple[int, int, int]:
     return rgb  # type: ignore[return-value]
 
 
-def is_whiteish(threshold: int) -> Callable[[tuple[int, int, int, int]], bool]:
-    return lambda px: px[0] >= threshold and px[1] >= threshold and px[2] >= threshold
+def is_whiteish(threshold: int) -> PixelMatcher:
+    return lambda px: px[3] == 0 or (
+        px[0] >= threshold and px[1] >= threshold and px[2] >= threshold
+    )
 
 
 def is_near_color(
     bg_color: tuple[int, int, int],
     tolerance: int,
-) -> Callable[[tuple[int, int, int, int]], bool]:
+) -> PixelMatcher:
     br, bg, bb = bg_color
 
-    def match(px: tuple[int, int, int, int]) -> bool:
-        r, g, b, _ = px
+    def match(px: Pixel) -> bool:
+        r, g, b, a = px
+        if a == 0:
+            return True
         return max(abs(r - br), abs(g - bg), abs(b - bb)) <= tolerance
 
     return match
+
+
+def iter_border_pixels(img: Image.Image) -> Iterable[Pixel]:
+    pixels = img.load()
+    width, height = img.size
+
+    for x in range(width):
+        yield pixels[x, 0]
+        if height > 1:
+            yield pixels[x, height - 1]
+
+    for y in range(1, max(1, height - 1)):
+        yield pixels[0, y]
+        if width > 1:
+            yield pixels[width - 1, y]
+
+
+def iter_transparency_frontier_pixels(img: Image.Image) -> Iterable[Pixel]:
+    pixels = img.load()
+    width, height = img.size
+
+    for y in range(height):
+        for x in range(width):
+            px = pixels[x, y]
+            if px[3] == 0:
+                continue
+
+            for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if 0 <= nx < width and 0 <= ny < height and pixels[nx, ny][3] == 0:
+                    yield px
+                    break
+
+
+def percentile(sorted_values: list[int], fraction: float) -> int:
+    if not sorted_values:
+        raise ValueError("percentile requires at least one value")
+    index = round((len(sorted_values) - 1) * fraction)
+    return sorted_values[index]
+
+
+def infer_white_threshold(img: Image.Image, threshold: int) -> int:
+    """Relax the white threshold when background-adjacent pixels are off-white."""
+    rgba = img.convert("RGBA")
+    min_candidate = max(0, threshold - 35)
+    candidate_min_channels = sorted(
+        min(r, g, b)
+        for r, g, b, a in chain(
+            iter_border_pixels(rgba),
+            iter_transparency_frontier_pixels(rgba),
+        )
+        if a > 0 and min(r, g, b) >= min_candidate
+    )
+    if not candidate_min_channels:
+        return threshold
+
+    edge_floor = percentile(candidate_min_channels, 0.05)
+    if edge_floor >= threshold:
+        return threshold
+
+    return max(0, edge_floor - 1)
+
+
+def build_background_matcher(
+    img: Image.Image,
+    threshold: int,
+    bg_color: tuple[int, int, int] | None = None,
+    tolerance: int = 12,
+) -> tuple[PixelMatcher, int]:
+    if bg_color is not None:
+        return is_near_color(bg_color, tolerance), threshold
+
+    effective_threshold = infer_white_threshold(img, threshold)
+    return is_whiteish(effective_threshold), effective_threshold
 
 
 def iter_image_files(input_path: Path) -> Iterable[Path]:
@@ -77,7 +157,7 @@ def build_output_path(input_file: Path, input_root: Path, output_path: Path) -> 
 
 def remove_matching_pixels_everywhere(
     img: Image.Image,
-    matches_background: Callable[[tuple[int, int, int, int]], bool],
+    matches_background: PixelMatcher,
 ) -> int:
     pixels = img.load()
     width, height = img.size
@@ -86,16 +166,17 @@ def remove_matching_pixels_everywhere(
     for y in range(height):
         for x in range(width):
             if matches_background(pixels[x, y]):
-                r, g, b, _ = pixels[x, y]
-                pixels[x, y] = (r, g, b, 0)
-                removed += 1
+                r, g, b, a = pixels[x, y]
+                if a != 0:
+                    pixels[x, y] = (r, g, b, 0)
+                    removed += 1
 
     return removed
 
 
 def remove_edge_connected_background(
     img: Image.Image,
-    matches_background: Callable[[tuple[int, int, int, int]], bool],
+    matches_background: PixelMatcher,
 ) -> int:
     pixels = img.load()
     width, height = img.size
@@ -118,9 +199,10 @@ def remove_edge_connected_background(
     removed = 0
     while queue:
         x, y = queue.popleft()
-        r, g, b, _ = pixels[x, y]
-        pixels[x, y] = (r, g, b, 0)
-        removed += 1
+        r, g, b, a = pixels[x, y]
+        if a != 0:
+            pixels[x, y] = (r, g, b, 0)
+            removed += 1
 
         for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
             if 0 <= nx < width and 0 <= ny < height:
@@ -133,18 +215,38 @@ def process_image(
     input_file: Path,
     output_file: Path,
     mode: str,
-    matches_background: Callable[[tuple[int, int, int, int]], bool],
-) -> int:
+    threshold: int,
+    bg_color: tuple[int, int, int] | None,
+    tolerance: int,
+) -> tuple[int, int]:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     img = Image.open(input_file).convert("RGBA")
+    matches_background, effective_threshold = build_background_matcher(
+        img,
+        threshold,
+        bg_color,
+        tolerance,
+    )
+    result, removed = remove_background_from_image(img, mode, matches_background)
+    result.save(output_file)
+    return removed, effective_threshold
 
+
+def remove_background_from_image(
+    img: Image.Image,
+    mode: str,
+    matches_background: PixelMatcher,
+) -> tuple[Image.Image, int]:
+    if mode not in {"edge", "all"}:
+        raise ValueError("mode must be 'edge' or 'all'")
+
+    img = img.convert("RGBA")
     if mode == "all":
         removed = remove_matching_pixels_everywhere(img, matches_background)
     else:
         removed = remove_edge_connected_background(img, matches_background)
 
-    img.save(output_file)
-    return removed
+    return img, removed
 
 
 def parse_args() -> argparse.Namespace:
@@ -201,12 +303,6 @@ def main() -> None:
     if args.tolerance < 0 or args.tolerance > 255:
         raise SystemExit("--tolerance 必须在 0-255 之间")
 
-    matches_background = (
-        is_near_color(args.bg_color, args.tolerance)
-        if args.bg_color
-        else is_whiteish(args.threshold)
-    )
-
     image_files = list(iter_image_files(args.input))
     if not image_files:
         raise SystemExit("没有找到可处理的图片文件")
@@ -215,8 +311,20 @@ def main() -> None:
 
     for input_file in image_files:
         output_file = build_output_path(input_file, args.input, args.output)
-        removed = process_image(input_file, output_file, args.mode, matches_background)
-        print(f"{input_file} -> {output_file} ({removed} pixels removed)")
+        removed, effective_threshold = process_image(
+            input_file,
+            output_file,
+            args.mode,
+            args.threshold,
+            args.bg_color,
+            args.tolerance,
+        )
+        suffix = (
+            f", effective threshold {effective_threshold}"
+            if args.bg_color is None and effective_threshold != args.threshold
+            else ""
+        )
+        print(f"{input_file} -> {output_file} ({removed} pixels removed{suffix})")
 
     print("Done!")
 
