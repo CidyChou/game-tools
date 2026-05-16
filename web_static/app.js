@@ -526,21 +526,6 @@ function drawFrameToCanvas(image, frameIndex, config, canvas) {
   return { canvas, context, source };
 }
 
-function makeTransparentFrame(frameCanvas, config) {
-  const context = frameCanvas.getContext("2d", { willReadFrequently: true });
-  const imageData = context.getImageData(0, 0, frameCanvas.width, frameCanvas.height);
-  const { data } = imageData;
-
-  for (let index = 0; index < data.length; index += 4) {
-    if (isSpriteBackgroundPixel(data, index, config.contentThreshold, config.ignoreShadow)) {
-      data[index + 3] = 0;
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return frameCanvas;
-}
-
 function analyzeFrameComponent(imageData, config) {
   const { data, width, height } = imageData;
   const total = width * height;
@@ -650,6 +635,17 @@ function analyzeFrameComponent(imageData, config) {
   };
 }
 
+function fillAlignedFrameBackground(frameCanvas, targetContext) {
+  const context = frameCanvas.getContext("2d", { willReadFrequently: true });
+  const sampleX = Math.min(2, frameCanvas.width - 1);
+  const sampleY = Math.min(2, frameCanvas.height - 1);
+  const [r, g, b, alpha] = context.getImageData(sampleX, sampleY, 1, 1).data;
+  if (alpha < 8) return;
+
+  targetContext.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha / 255})`;
+  targetContext.fillRect(0, 0, frameCanvas.width, frameCanvas.height);
+}
+
 function median(values) {
   if (!values.length) return 0;
   const sorted = values.slice().sort((a, b) => a - b);
@@ -734,7 +730,7 @@ function drawAdvancedAlignedFrame(image, frameIndex, config, targetContext) {
 
   const frameCanvas = document.createElement("canvas");
   drawFrameToCanvas(image, frameIndex, config, frameCanvas);
-  makeTransparentFrame(frameCanvas, config);
+  fillAlignedFrameBackground(frameCanvas, targetContext);
   targetContext.drawImage(frameCanvas, analysis.dx, analysis.dy);
 }
 
