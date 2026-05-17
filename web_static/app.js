@@ -25,6 +25,16 @@ const videoState = {
   generating: false,
 };
 
+const processState = {
+  file: null,
+  sourceUrl: "",
+  resultUrl: "",
+  naturalWidth: 0,
+  naturalHeight: 0,
+  aspectRatio: 1,
+  syncingDimensions: false,
+};
+
 const $ = (id) => document.getElementById(id);
 
 const imageInput = $("imageInput");
@@ -84,10 +94,31 @@ const videoSheetContext = videoSheetCanvas.getContext("2d");
 const videoFrameCanvas = $("videoFrameCanvas");
 const videoFrameContext = videoFrameCanvas.getContext("2d");
 const videoSheetMetrics = $("videoSheetMetrics");
+const processInput = $("processInput");
+const processDropZone = $("processDropZone");
+const processSourcePreview = $("processSourcePreview");
+const processResultPreview = $("processResultPreview");
+const processStatus = $("processStatus");
+const processFeedback = $("processFeedback");
+const processButton = $("processButton");
+const downloadProcessed = $("downloadProcessed");
+const processSourceMetrics = $("processSourceMetrics");
+const processOutputMetrics = $("processOutputMetrics");
+const processWidthInput = $("processWidthInput");
+const processHeightInput = $("processHeightInput");
+const processKeepAspectInput = $("processKeepAspectInput");
+const processResizeInput = $("processResizeInput");
+const processCompressInput = $("processCompressInput");
+const processPngModeInput = $("processPngModeInput");
+const processPaletteColorsInput = $("processPaletteColorsInput");
+const navLinks = Array.from(document.querySelectorAll("[data-nav-link]"));
+const toolSections = navLinks
+  .map((link) => document.querySelector(link.getAttribute("href")))
+  .filter(Boolean);
 
 const feedbackClasses = ["text-slate-500", "text-red-600", "text-emerald-700"];
-const dropActiveClasses = ["scale-[1.02]", "border-indigo-400", "bg-white/80"];
-const linkReadyClasses = ["cursor-pointer", "text-slate-700", "hover:scale-[1.02]", "hover:bg-white"];
+const dropActiveClasses = ["border-indigo-400", "bg-white"];
+const linkReadyClasses = ["cursor-pointer", "text-slate-700", "hover:bg-white"];
 const linkDisabledClasses = ["cursor-not-allowed", "text-slate-400"];
 
 function addClasses(element, classes) {
@@ -131,6 +162,51 @@ function enableDownloadLink(link, href, filename) {
   removeClasses(link, linkDisabledClasses);
   addClasses(link, linkReadyClasses);
   link.setAttribute("aria-disabled", "false");
+}
+
+function setActiveNav(targetId) {
+  navLinks.forEach((link) => {
+    const isActive = link.getAttribute("href") === `#${targetId}`;
+    if (isActive) {
+      link.setAttribute("aria-current", "true");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+}
+
+function wireNavigation() {
+  if (!navLinks.length || !toolSections.length) return;
+
+  navLinks.forEach((link) => {
+    link.addEventListener("click", () => {
+      const targetId = link.getAttribute("href").slice(1);
+      setActiveNav(targetId);
+    });
+  });
+
+  if (!("IntersectionObserver" in window)) {
+    setActiveNav((window.location.hash || navLinks[0].getAttribute("href")).slice(1));
+    return;
+  }
+
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const visibleEntry = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visibleEntry) {
+        setActiveNav(visibleEntry.target.id);
+      }
+    },
+    {
+      rootMargin: "-35% 0px -55% 0px",
+      threshold: [0, 0.25, 0.5],
+    },
+  );
+
+  toolSections.forEach((section) => observer.observe(section));
+  setActiveNav((window.location.hash || navLinks[0].getAttribute("href")).slice(1));
 }
 
 function wireDropZone(zone, input, onFiles) {
@@ -244,11 +320,166 @@ async function removeBackground() {
   }
 }
 
+function resetProcessedResult() {
+  revokeUrl("resultUrl", processState);
+  processResultPreview.removeAttribute("src");
+  processResultPreview.classList.add("hidden");
+  processResultPreview.classList.remove("block");
+  disableDownloadLink(downloadProcessed);
+  processOutputMetrics.textContent = "-";
+}
+
+function updateProcessResizeInputs() {
+  const enabled = processResizeInput.checked;
+  processWidthInput.disabled = !enabled;
+  processHeightInput.disabled = !enabled;
+  processKeepAspectInput.disabled = !enabled;
+}
+
+function updateProcessCompressionInputs() {
+  const paletteEnabled = processCompressInput.checked && processPngModeInput.value === "palette";
+  processPngModeInput.disabled = !processCompressInput.checked;
+  processPaletteColorsInput.disabled = !paletteEnabled;
+}
+
+function syncProcessDimension(changedInput) {
+  if (
+    processState.syncingDimensions ||
+    !processKeepAspectInput.checked ||
+    !processState.naturalWidth ||
+    !processState.naturalHeight
+  ) {
+    return;
+  }
+
+  const width = Number(processWidthInput.value);
+  const height = Number(processHeightInput.value);
+  processState.syncingDimensions = true;
+  if (changedInput === processWidthInput && Number.isFinite(width) && width > 0) {
+    processHeightInput.value = String(Math.max(1, Math.round(width / processState.aspectRatio)));
+  } else if (changedInput === processHeightInput && Number.isFinite(height) && height > 0) {
+    processWidthInput.value = String(Math.max(1, Math.round(height * processState.aspectRatio)));
+  }
+  processState.syncingDimensions = false;
+}
+
+function handleProcessFiles(files) {
+  const file = files?.[0];
+  if (!file) return;
+
+  processState.file = file;
+  processState.naturalWidth = 0;
+  processState.naturalHeight = 0;
+  processState.aspectRatio = 1;
+  revokeUrl("sourceUrl", processState);
+  resetProcessedResult();
+
+  processState.sourceUrl = URL.createObjectURL(file);
+  processSourcePreview.src = processState.sourceUrl;
+  processSourcePreview.classList.remove("hidden");
+  processSourcePreview.classList.add("block");
+  processButton.disabled = true;
+  processStatus.textContent = "读取中";
+  processSourceMetrics.textContent = `${formatBytes(file.size)}`;
+  setFeedback(processFeedback, "正在读取图片尺寸。");
+
+  const image = new Image();
+  image.onload = () => {
+    processState.naturalWidth = image.naturalWidth;
+    processState.naturalHeight = image.naturalHeight;
+    processState.aspectRatio = image.naturalWidth / image.naturalHeight;
+    processWidthInput.value = String(image.naturalWidth);
+    processHeightInput.value = String(image.naturalHeight);
+    processSourceMetrics.textContent = `${image.naturalWidth}x${image.naturalHeight}，${formatBytes(file.size)}`;
+    processButton.disabled = false;
+    processStatus.textContent = "已选择";
+    setFeedback(processFeedback, file.name);
+  };
+  image.onerror = () => {
+    processStatus.textContent = "失败";
+    processButton.disabled = true;
+    setFeedback(processFeedback, "图片无法读取。", "error");
+  };
+  image.src = processState.sourceUrl;
+}
+
+async function processImage() {
+  if (!processState.file) return;
+
+  const form = new FormData();
+  form.append("image", processState.file);
+  form.append("compress_enabled", processCompressInput.checked ? "true" : "false");
+  form.append("resize_enabled", processResizeInput.checked ? "true" : "false");
+  form.append("target_width", processWidthInput.value || "0");
+  form.append("target_height", processHeightInput.value || "0");
+  form.append("keep_aspect_ratio", processKeepAspectInput.checked ? "true" : "false");
+  form.append("png_mode", processPngModeInput.value);
+  form.append("palette_colors", processPaletteColorsInput.value);
+
+  processButton.disabled = true;
+  processButton.textContent = "处理中...";
+  processStatus.textContent = "处理中";
+  setFeedback(processFeedback, "正在压缩并生成 PNG。");
+
+  try {
+    const response = await fetch("/api/process-image", {
+      method: "POST",
+      body: form,
+    });
+
+    if (!response.ok) {
+      let message = "处理失败";
+      try {
+        const error = await response.json();
+        message = error.detail || message;
+      } catch {
+        message = await response.text();
+      }
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    revokeUrl("resultUrl", processState);
+    processState.resultUrl = URL.createObjectURL(blob);
+    processResultPreview.src = processState.resultUrl;
+    processResultPreview.classList.remove("hidden");
+    processResultPreview.classList.add("block");
+    enableDownloadLink(
+      downloadProcessed,
+      processState.resultUrl,
+      `${processState.file.name.replace(/\.[^.]+$/, "") || "image"}-processed.png`,
+    );
+
+    const outputWidth = response.headers.get("X-Output-Width") || "-";
+    const outputHeight = response.headers.get("X-Output-Height") || "-";
+    const sourceBytes = Number(response.headers.get("X-Source-Bytes") || processState.file.size);
+    const outputBytes = Number(response.headers.get("X-Output-Bytes") || blob.size);
+    const saved = sourceBytes > 0 ? Math.max(0, 100 - (outputBytes / sourceBytes) * 100) : 0;
+    processOutputMetrics.textContent = `${outputWidth}x${outputHeight}，${formatBytes(outputBytes)}`;
+    processStatus.textContent = "完成";
+    setFeedback(processFeedback, `完成，体积减少 ${saved.toFixed(1)}%。`, "success");
+  } catch (error) {
+    processStatus.textContent = "失败";
+    setFeedback(processFeedback, error.message, "error");
+  } finally {
+    processButton.disabled = false;
+    processButton.textContent = "处理图片";
+  }
+}
+
 function numberValue(id, fallback) {
   const raw = $(id).value.trim();
   if (raw === "") return fallback;
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  const kib = bytes / 1024;
+  if (kib < 1024) return `${kib.toFixed(1)} KB`;
+  return `${(kib / 1024).toFixed(2)} MB`;
 }
 
 function formatSeconds(value) {
@@ -1242,8 +1473,11 @@ async function generateVideoFrames() {
 wireDropZone(imageDropZone, imageInput, handleImageFiles);
 wireDropZone(spriteDropZone, spriteInput, handleSpriteFiles);
 wireDropZone(videoDropZone, videoInput, handleVideoFiles);
+wireDropZone(processDropZone, processInput, handleProcessFiles);
+wireNavigation();
 
 removeButton.addEventListener("click", removeBackground);
+processButton.addEventListener("click", processImage);
 playButton.addEventListener("click", toggleSprite);
 prevFrameButton.addEventListener("click", () => stepFrame(-1));
 nextFrameButton.addEventListener("click", () => stepFrame(1));
@@ -1273,6 +1507,33 @@ frameSlider.addEventListener("input", () => {
 ["videoFpsInput", "videoColumnsInput", "videoFrameWidthInput"].forEach((id) => {
   $(id).addEventListener("input", () => updateVideoSummary());
 });
+
+[processWidthInput, processHeightInput].forEach((input) => {
+  input.addEventListener("input", () => {
+    syncProcessDimension(input);
+    resetProcessedResult();
+  });
+});
+
+processResizeInput.addEventListener("change", () => {
+  updateProcessResizeInputs();
+  resetProcessedResult();
+});
+processKeepAspectInput.addEventListener("change", () => {
+  if (processKeepAspectInput.checked) {
+    syncProcessDimension(processWidthInput);
+  }
+  resetProcessedResult();
+});
+processCompressInput.addEventListener("change", () => {
+  updateProcessCompressionInputs();
+  resetProcessedResult();
+});
+processPngModeInput.addEventListener("change", () => {
+  updateProcessCompressionInputs();
+  resetProcessedResult();
+});
+processPaletteColorsInput.addEventListener("change", resetProcessedResult);
 
 [
   "columnsInput",
@@ -1336,6 +1597,12 @@ downloadResult.addEventListener("click", (event) => {
   }
 });
 
+downloadProcessed.addEventListener("click", (event) => {
+  if (downloadProcessed.getAttribute("aria-disabled") === "true") {
+    event.preventDefault();
+  }
+});
+
 downloadVideoSheet.addEventListener("click", (event) => {
   if (downloadVideoSheet.getAttribute("aria-disabled") === "true") {
     event.preventDefault();
@@ -1358,3 +1625,5 @@ frameSlider.disabled = true;
 drawSpriteFrame();
 updateVideoSummary();
 updateAlignmentControls();
+updateProcessResizeInputs();
+updateProcessCompressionInputs();
