@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
+import sys
+from pathlib import Path
 
-import uvicorn
+PROJECT_DIR = Path(__file__).resolve().parent
+VENV_PYTHON = PROJECT_DIR / ".venv" / "bin" / "python"
+
+
+def ensure_project_python() -> None:
+    if not VENV_PYTHON.exists():
+        return
+
+    if Path(sys.prefix) != PROJECT_DIR / ".venv":
+        os.execv(str(VENV_PYTHON), [str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]])
 
 
 def get_lan_ip() -> str:
@@ -27,6 +39,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    ensure_project_python()
+
+    try:
+        import uvicorn
+    except ModuleNotFoundError as exc:
+        if exc.name != "uvicorn":
+            raise
+        print("缺少依赖 uvicorn。请先安装项目依赖：")
+        print("  python3 -m venv .venv")
+        print("  .venv/bin/python -m pip install -r requirements.txt")
+        raise SystemExit(1) from exc
+
     args = parse_args()
     lan_ip = get_lan_ip()
 

@@ -5,7 +5,8 @@
 ## 安装
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## 使用
@@ -13,7 +14,7 @@ python3 -m pip install -r requirements.txt
 启动 Web 工具台：
 
 ```bash
-.venv/bin/python run_web.py
+python3 run_web.py
 ```
 
 默认会监听 `0.0.0.0:8000`，同一局域网设备可以用本机 IP 访问，例如：
