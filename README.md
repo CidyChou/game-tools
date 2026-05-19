@@ -49,6 +49,18 @@ python3 remove_bg.py input/example.jpg output/example.png
 python3 remove_bg.py input output
 ```
 
+压缩 PNG 图片（最多 256 色调色板，有损量化；不填输出路径时原地压缩 PNG）：
+
+```bash
+python3 compress_images.py input/example.png
+```
+
+压缩目录并输出到另一个目录：
+
+```bash
+python3 compress_images.py input output-compressed
+```
+
 ## 常用参数
 
 默认只抠除和图片边缘连通的白色背景，更适合保留主体内部的白色区域。程序会根据图片边缘自动放宽白色阈值，用来清理灰白棋盘格、压缩噪点和轻微渐变这类不够纯白的背景。
