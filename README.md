@@ -96,3 +96,14 @@ curl -X POST http://127.0.0.1:8000/api/remove-background \
 ```
 
 接口返回 `image/png`，并在 `X-Pixels-Removed` 响应头里返回本次新抠除的像素数。未指定背景色时，`X-Effective-Threshold` 会返回实际使用的白色阈值。
+
+批量去背景接口返回 ZIP：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/remove-background/batch \
+  -F "images=@input/a.jpg" \
+  -F "images=@input/b.webp" \
+  -F "mode=edge" \
+  -F "threshold=245" \
+  --output output/transparent-images.zip
+```

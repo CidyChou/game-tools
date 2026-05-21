@@ -1,5 +1,6 @@
 const removeState = {
   file: null,
+  files: [],
   sourceUrl: "",
   resultUrl: "",
 };
@@ -229,10 +230,12 @@ function wireDropZone(zone, input, onFiles) {
 }
 
 function handleImageFiles(files) {
-  const file = files?.[0];
+  const selectedFiles = Array.from(files || []);
+  const file = selectedFiles[0];
   if (!file) return;
 
   removeState.file = file;
+  removeState.files = selectedFiles;
   revokeUrl("sourceUrl", removeState);
   revokeUrl("resultUrl", removeState);
 
@@ -243,21 +246,29 @@ function handleImageFiles(files) {
   resultPreview.removeAttribute("src");
   resultPreview.classList.add("hidden");
   resultPreview.classList.remove("block");
-  downloadResult.removeAttribute("href");
-  downloadResult.removeAttribute("download");
-  removeClasses(downloadResult, linkReadyClasses);
-  addClasses(downloadResult, linkDisabledClasses);
-  downloadResult.setAttribute("aria-disabled", "true");
+  downloadResult.textContent = "下载 PNG";
+  disableDownloadLink(downloadResult);
   removeButton.disabled = false;
-  removeStatus.textContent = "已选择";
-  setFeedback(removeFeedback, file.name);
+  removeButton.textContent = selectedFiles.length > 1 ? "批量去背景" : "一键去背景";
+  removeStatus.textContent = selectedFiles.length > 1 ? `已选择 ${selectedFiles.length} 张` : "已选择";
+  setFeedback(
+    removeFeedback,
+    selectedFiles.length > 1 ? `已选择 ${selectedFiles.length} 张，预览第一张：${file.name}` : file.name,
+  );
 }
 
 async function removeBackground() {
-  if (!removeState.file) return;
+  if (!removeState.files.length) return;
+
+  const isBatch = removeState.files.length > 1;
+  const idleButtonText = isBatch ? "批量去背景" : "一键去背景";
 
   const form = new FormData();
-  form.append("image", removeState.file);
+  if (isBatch) {
+    removeState.files.forEach((file) => form.append("images", file));
+  } else {
+    form.append("image", removeState.file);
+  }
   form.append("mode", $("removeMode").value);
   form.append("threshold", $("thresholdInput").value);
   form.append("bg_color", $("bgColorInput").value.trim());
@@ -266,10 +277,10 @@ async function removeBackground() {
   removeButton.disabled = true;
   removeButton.textContent = "处理中...";
   removeStatus.textContent = "处理中";
-  setFeedback(removeFeedback, "正在抠除背景。");
+  setFeedback(removeFeedback, isBatch ? `正在批量抠除 ${removeState.files.length} 张图片。` : "正在抠除背景。");
 
   try {
-    const response = await fetch("/api/remove-background", {
+    const response = await fetch(isBatch ? "/api/remove-background/batch" : "/api/remove-background", {
       method: "POST",
       body: form,
     });
@@ -290,14 +301,24 @@ async function removeBackground() {
     removeState.resultUrl = URL.createObjectURL(blob);
     const removed = response.headers.get("X-Pixels-Removed") || "0";
 
-    resultPreview.src = removeState.resultUrl;
-    resultPreview.classList.remove("hidden");
-    resultPreview.classList.add("block");
-    downloadResult.href = removeState.resultUrl;
-    downloadResult.download = `${removeState.file.name.replace(/\.[^.]+$/, "") || "image"}-transparent.png`;
-    removeClasses(downloadResult, linkDisabledClasses);
-    addClasses(downloadResult, linkReadyClasses);
-    downloadResult.setAttribute("aria-disabled", "false");
+    if (isBatch) {
+      resultPreview.removeAttribute("src");
+      resultPreview.classList.add("hidden");
+      resultPreview.classList.remove("block");
+      downloadResult.textContent = "下载 ZIP";
+      enableDownloadLink(downloadResult, removeState.resultUrl, "removed-background-batch.zip");
+    } else {
+      resultPreview.src = removeState.resultUrl;
+      resultPreview.classList.remove("hidden");
+      resultPreview.classList.add("block");
+      downloadResult.textContent = "下载 PNG";
+      enableDownloadLink(
+        downloadResult,
+        removeState.resultUrl,
+        `${removeState.file.name.replace(/\.[^.]+$/, "") || "image"}-transparent.png`,
+      );
+    }
+
     removeStatus.textContent = "完成";
     const effectiveThreshold = response.headers.get("X-Effective-Threshold");
     const thresholdHint =
@@ -306,9 +327,12 @@ async function removeBackground() {
       effectiveThreshold !== $("thresholdInput").value
         ? `，自动阈值 ${effectiveThreshold}`
         : "";
+    const processedImages = response.headers.get("X-Images-Processed") || String(removeState.files.length);
     setFeedback(
       removeFeedback,
-      `完成，抠除 ${Number(removed).toLocaleString()} 个像素${thresholdHint}。`,
+      isBatch
+        ? `完成 ${processedImages} 张，合计抠除 ${Number(removed).toLocaleString()} 个像素，已打包 ZIP。`
+        : `完成，抠除 ${Number(removed).toLocaleString()} 个像素${thresholdHint}。`,
       "success",
     );
   } catch (error) {
@@ -316,7 +340,7 @@ async function removeBackground() {
     setFeedback(removeFeedback, error.message, "error");
   } finally {
     removeButton.disabled = false;
-    removeButton.textContent = "一键去背景";
+    removeButton.textContent = idleButtonText;
   }
 }
 

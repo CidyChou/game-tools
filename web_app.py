@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from argparse import ArgumentTypeError
+from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
+import re
+import zipfile
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -19,6 +22,7 @@ from remove_bg import (
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web_static"
+FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
 app = FastAPI(title="PNG Tools Web")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -107,6 +111,100 @@ def process_image_bytes(
     }
 
 
+def _validate_remove_options(mode: str, threshold: int, tolerance: int) -> None:
+    if mode not in {"edge", "all"}:
+        raise ValueError("mode must be 'edge' or 'all'")
+    if not 0 <= threshold <= 255:
+        raise ValueError("threshold must be between 0 and 255")
+    if not 0 <= tolerance <= 255:
+        raise ValueError("tolerance must be between 0 and 255")
+
+
+def _validate_image_suffix(filename: str | None) -> None:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix and suffix not in IMAGE_EXTENSIONS:
+        raise ValueError("unsupported image format")
+
+
+def _zip_output_name(filename: str | None, index: int, used_names: set[str]) -> str:
+    stem = Path(filename or "").stem or f"image-{index}"
+    safe_stem = FILENAME_SAFE_PATTERN.sub("_", stem).strip("._-") or f"image-{index}"
+    base_name = f"{safe_stem}-transparent"
+    output_name = f"{base_name}.png"
+    suffix = 2
+    while output_name in used_names:
+        output_name = f"{base_name}-{suffix}.png"
+        suffix += 1
+    used_names.add(output_name)
+    return output_name
+
+
+def remove_background_bytes(
+    raw: bytes,
+    *,
+    mode: str,
+    threshold: int,
+    bg_color: str,
+    tolerance: int,
+) -> tuple[bytes, dict[str, str]]:
+    _validate_remove_options(mode, threshold, tolerance)
+    source = _open_uploaded_image(raw)
+
+    try:
+        parsed_bg_color = parse_color(bg_color) if bg_color.strip() else None
+    except ArgumentTypeError as exc:
+        raise ValueError(str(exc)) from exc
+
+    background_matcher, effective_threshold = build_background_matcher(
+        source,
+        threshold,
+        parsed_bg_color,
+        tolerance,
+    )
+    result, removed = remove_background_from_image(source, mode, background_matcher)
+    output = BytesIO()
+    result.save(output, format="PNG")
+    return output.getvalue(), {
+        "pixels_removed": str(removed),
+        "effective_threshold": str(effective_threshold),
+    }
+
+
+def build_remove_background_zip(
+    uploads: Sequence[tuple[str | None, bytes]],
+    *,
+    mode: str,
+    threshold: int,
+    bg_color: str,
+    tolerance: int,
+) -> tuple[bytes, dict[str, str]]:
+    _validate_remove_options(mode, threshold, tolerance)
+    if not uploads:
+        raise ValueError("at least one image is required")
+
+    archive = BytesIO()
+    used_names: set[str] = set()
+    total_removed = 0
+
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for index, (filename, raw) in enumerate(uploads, start=1):
+            _validate_image_suffix(filename)
+            processed, metadata = remove_background_bytes(
+                raw,
+                mode=mode,
+                threshold=threshold,
+                bg_color=bg_color,
+                tolerance=tolerance,
+            )
+            total_removed += int(metadata["pixels_removed"])
+            zip_file.writestr(_zip_output_name(filename, index, used_names), processed)
+
+    return archive.getvalue(), {
+        "images_processed": str(len(uploads)),
+        "pixels_removed": str(total_removed),
+    }
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -120,48 +218,56 @@ async def remove_background(
     bg_color: str = Form(""),
     tolerance: int = Form(12),
 ) -> Response:
-    if mode not in {"edge", "all"}:
-        raise HTTPException(status_code=400, detail="mode must be 'edge' or 'all'")
-    if not 0 <= threshold <= 255:
-        raise HTTPException(status_code=400, detail="threshold must be between 0 and 255")
-    if not 0 <= tolerance <= 255:
-        raise HTTPException(status_code=400, detail="tolerance must be between 0 and 255")
-
-    suffix = Path(image.filename or "").suffix.lower()
-    if suffix and suffix not in IMAGE_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="unsupported image format")
-
-    raw = await image.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="empty image upload")
-
     try:
-        source = Image.open(BytesIO(raw))
-    except UnidentifiedImageError as exc:
-        raise HTTPException(status_code=400, detail="image could not be decoded") from exc
-
-    try:
-        parsed_bg_color = parse_color(bg_color) if bg_color.strip() else None
-    except ArgumentTypeError as exc:
+        _validate_image_suffix(image.filename)
+        result, metadata = remove_background_bytes(
+            await image.read(),
+            mode=mode,
+            threshold=threshold,
+            bg_color=bg_color,
+            tolerance=tolerance,
+        )
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    background_matcher, effective_threshold = build_background_matcher(
-        source,
-        threshold,
-        parsed_bg_color,
-        tolerance,
-    )
-    result, removed = remove_background_from_image(source, mode, background_matcher)
-    output = BytesIO()
-    result.save(output, format="PNG")
-
     return Response(
-        content=output.getvalue(),
+        content=result,
         media_type="image/png",
         headers={
             "Content-Disposition": 'attachment; filename="removed-background.png"',
-            "X-Pixels-Removed": str(removed),
-            "X-Effective-Threshold": str(effective_threshold),
+            "X-Pixels-Removed": metadata["pixels_removed"],
+            "X-Effective-Threshold": metadata["effective_threshold"],
+        },
+    )
+
+
+@app.post("/api/remove-background/batch")
+async def remove_background_batch(
+    images: list[UploadFile] = File(...),
+    mode: str = Form("edge"),
+    threshold: int = Form(245),
+    bg_color: str = Form(""),
+    tolerance: int = Form(12),
+) -> Response:
+    try:
+        uploads = [(image.filename, await image.read()) for image in images]
+        archive, metadata = build_remove_background_zip(
+            uploads,
+            mode=mode,
+            threshold=threshold,
+            bg_color=bg_color,
+            tolerance=tolerance,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="removed-background-batch.zip"',
+            "X-Images-Processed": metadata["images_processed"],
+            "X-Pixels-Removed": metadata["pixels_removed"],
         },
     )
 
