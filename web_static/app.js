@@ -64,6 +64,8 @@ const prevFrameButton = $("prevFrameButton");
 const nextFrameButton = $("nextFrameButton");
 const frameSlider = $("frameSlider");
 const frameOutput = $("frameOutput");
+const speedSlider = $("speedSlider");
+const speedOutput = $("speedOutput");
 const spriteViewModeInput = $("spriteViewModeInput");
 const baseFrameInput = $("baseFrameInput");
 const noiseAreaInput = $("noiseAreaInput");
@@ -547,7 +549,7 @@ function getSpriteConfig() {
     : 1;
   const frameWidth = Math.max(1, Math.floor(numberValue("frameWidthInput", autoWidth)));
   const frameHeight = Math.max(1, Math.floor(numberValue("frameHeightInput", autoHeight)));
-  const fps = Math.min(60, Math.max(1, Math.floor(numberValue("fpsInput", 12))));
+  const fps = Math.min(60, Math.max(1, Math.floor(numberValue("fpsInput", 8))));
   const contentThreshold = Math.min(255, Math.max(0, Math.floor(numberValue("contentThresholdInput", 248))));
   const alignPreview = $("alignPreviewInput").checked;
   const anchor = $("anchorInput").value;
@@ -628,6 +630,13 @@ function updateFrameOutput() {
   frameSlider.value = String(spriteState.currentFrame);
   frameOutput.textContent = `${total ? spriteState.currentFrame + 1 : 0} / ${total}`;
   updateAlignmentControls();
+}
+
+function syncSpriteSpeedControls() {
+  const fps = Math.min(60, Math.max(1, Math.floor(numberValue("fpsInput", 8))));
+  $("fpsInput").value = String(fps);
+  speedSlider.value = String(Math.min(Number(speedSlider.max), Math.max(Number(speedSlider.min), fps)));
+  speedOutput.textContent = `${fps} FPS`;
 }
 
 function updateSpriteMetrics(config) {
@@ -1277,6 +1286,7 @@ function loadSpriteFromBlob(blob, options = {}) {
     if (options.frameWidth) $("frameWidthInput").value = String(options.frameWidth);
     if (options.frameHeight) $("frameHeightInput").value = String(options.frameHeight);
     if (options.fps) $("fpsInput").value = String(options.fps);
+    syncSpriteSpeedControls();
     $("marginXInput").value = "0";
     $("marginYInput").value = "0";
     $("gapXInput").value = "0";
@@ -1615,11 +1625,23 @@ processPaletteColorsInput.addEventListener("change", resetProcessedResult);
       resetAlignmentState();
     }
     if (id === "fpsInput" && spriteState.playing) {
+      syncSpriteSpeedControls();
       startSprite();
       return;
     }
+    if (id === "fpsInput") {
+      syncSpriteSpeedControls();
+    }
     drawSpriteFrame();
   });
+});
+
+speedSlider.addEventListener("input", () => {
+  $("fpsInput").value = speedSlider.value;
+  syncSpriteSpeedControls();
+  if (spriteState.playing) {
+    startSprite();
+  }
 });
 
 $("alignPreviewInput").addEventListener("change", () => {
@@ -1669,6 +1691,7 @@ downloadPreviewSheet.addEventListener("click", (event) => {
 });
 
 frameSlider.disabled = true;
+syncSpriteSpeedControls();
 drawSpriteFrame();
 updateVideoSummary();
 updateAlignmentControls();
