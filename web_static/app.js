@@ -3,6 +3,8 @@ const removeState = {
   files: [],
   sourceUrl: "",
   resultUrl: "",
+  resultBlob: null,
+  resultFilename: "",
 };
 
 const spriteState = {
@@ -44,6 +46,7 @@ const sourcePreview = $("sourcePreview");
 const resultPreview = $("resultPreview");
 const removeButton = $("removeButton");
 const downloadResult = $("downloadResult");
+const importRemovedToProcess = $("importRemovedToProcess");
 const removeFeedback = $("removeFeedback");
 const removeStatus = $("removeStatus");
 
@@ -238,6 +241,8 @@ function handleImageFiles(files) {
   removeState.files = selectedFiles;
   revokeUrl("sourceUrl", removeState);
   revokeUrl("resultUrl", removeState);
+  removeState.resultBlob = null;
+  removeState.resultFilename = "";
 
   removeState.sourceUrl = URL.createObjectURL(file);
   sourcePreview.src = removeState.sourceUrl;
@@ -248,6 +253,7 @@ function handleImageFiles(files) {
   resultPreview.classList.remove("block");
   downloadResult.textContent = "下载 PNG";
   disableDownloadLink(downloadResult);
+  importRemovedToProcess.disabled = true;
   removeButton.disabled = false;
   removeButton.textContent = selectedFiles.length > 1 ? "批量去背景" : "一键去背景";
   removeStatus.textContent = selectedFiles.length > 1 ? `已选择 ${selectedFiles.length} 张` : "已选择";
@@ -302,12 +308,17 @@ async function removeBackground() {
     const removed = response.headers.get("X-Pixels-Removed") || "0";
 
     if (isBatch) {
+      removeState.resultBlob = null;
+      removeState.resultFilename = "";
       resultPreview.removeAttribute("src");
       resultPreview.classList.add("hidden");
       resultPreview.classList.remove("block");
       downloadResult.textContent = "下载 ZIP";
       enableDownloadLink(downloadResult, removeState.resultUrl, "removed-background-batch.zip");
+      importRemovedToProcess.disabled = true;
     } else {
+      removeState.resultBlob = blob;
+      removeState.resultFilename = `${removeState.file.name.replace(/\.[^.]+$/, "") || "image"}-transparent.png`;
       resultPreview.src = removeState.resultUrl;
       resultPreview.classList.remove("hidden");
       resultPreview.classList.add("block");
@@ -315,8 +326,9 @@ async function removeBackground() {
       enableDownloadLink(
         downloadResult,
         removeState.resultUrl,
-        `${removeState.file.name.replace(/\.[^.]+$/, "") || "image"}-transparent.png`,
+        removeState.resultFilename,
       );
+      importRemovedToProcess.disabled = false;
     }
 
     removeStatus.textContent = "完成";
@@ -342,6 +354,16 @@ async function removeBackground() {
     removeButton.disabled = false;
     removeButton.textContent = idleButtonText;
   }
+}
+
+function importRemovedResultToProcess() {
+  const blob = removeState.resultBlob;
+  if (!blob) return;
+
+  const file = new File([blob], removeState.resultFilename || "removed-background.png", { type: blob.type || "image/png" });
+  handleProcessFiles([file]);
+  setActiveNav("tool-process");
+  document.getElementById("tool-process").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function resetProcessedResult() {
@@ -1501,6 +1523,7 @@ wireDropZone(processDropZone, processInput, handleProcessFiles);
 wireNavigation();
 
 removeButton.addEventListener("click", removeBackground);
+importRemovedToProcess.addEventListener("click", importRemovedResultToProcess);
 processButton.addEventListener("click", processImage);
 playButton.addEventListener("click", toggleSprite);
 prevFrameButton.addEventListener("click", () => stepFrame(-1));

@@ -36,6 +36,19 @@ class SpriteExportTests(unittest.TestCase):
 
         self.assertRegex(source, r'<script src="/static/app\.js\?v=[^"]+" defer></script>')
 
+    def test_removed_background_result_can_be_imported_to_compression_tool(self) -> None:
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        script = APP_JS.read_text(encoding="utf-8")
+
+        self.assertIn('id="importRemovedToProcess"', html)
+        self.assertIn("导入到压缩", html)
+        self.assertIn('/static/app.js?v=20260602-import-remove-to-process', html)
+        self.assertIn('const importRemovedToProcess = $("importRemovedToProcess");', script)
+        self.assertIn("function importRemovedResultToProcess()", script)
+        self.assertIn("new File([blob]", script)
+        self.assertIn('document.getElementById("tool-process").scrollIntoView', script)
+        self.assertIn('importRemovedToProcess.addEventListener("click", importRemovedResultToProcess);', script)
+
 
 if __name__ == "__main__":
     unittest.main()
