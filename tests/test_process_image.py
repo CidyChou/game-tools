@@ -34,6 +34,65 @@ class ProcessImageTests(unittest.TestCase):
         self.assertEqual(metadata["output_width"], "6")
         self.assertEqual(metadata["output_height"], "4")
 
+    def test_crops_uploaded_png_to_requested_box(self) -> None:
+        image = Image.new("RGBA", (8, 6), (0, 0, 0, 0))
+        image.putpixel((2, 1), (255, 0, 0, 255))
+        image.putpixel((5, 4), (0, 0, 255, 255))
+
+        result, metadata = process_image_bytes(
+            png_bytes(image),
+            crop_enabled=True,
+            crop_x=2,
+            crop_y=1,
+            crop_width=4,
+            crop_height=4,
+            resize_enabled=False,
+            target_width=0,
+            target_height=0,
+            keep_aspect_ratio=True,
+            png_mode="lossless",
+        )
+
+        output = Image.open(BytesIO(result)).convert("RGBA")
+        self.assertEqual(output.size, (4, 4))
+        self.assertEqual(metadata["crop_x"], "2")
+        self.assertEqual(metadata["crop_y"], "1")
+        self.assertEqual(metadata["crop_width"], "4")
+        self.assertEqual(metadata["crop_height"], "4")
+        self.assertEqual(output.getpixel((0, 0)), (255, 0, 0, 255))
+        self.assertEqual(output.getpixel((3, 3)), (0, 0, 255, 255))
+
+    def test_resizes_cropped_region_instead_of_original_image(self) -> None:
+        image = Image.new("RGBA", (8, 8), (0, 0, 255, 255))
+        for y in range(2, 6):
+            for x in range(2, 6):
+                image.putpixel((x, y), (255, 0, 0, 255))
+
+        result, metadata = process_image_bytes(
+            png_bytes(image),
+            crop_enabled=True,
+            crop_x=2,
+            crop_y=2,
+            crop_width=4,
+            crop_height=4,
+            resize_enabled=True,
+            target_width=2,
+            target_height=2,
+            keep_aspect_ratio=True,
+            png_mode="lossless",
+        )
+
+        output = Image.open(BytesIO(result)).convert("RGBA")
+        self.assertEqual(output.size, (2, 2))
+        self.assertEqual(metadata["output_width"], "2")
+        self.assertEqual(metadata["output_height"], "2")
+        pixels = output.load()
+        for y in range(output.height):
+            for x in range(output.width):
+                pixel = pixels[x, y]
+                self.assertGreater(pixel[0], 240)
+                self.assertLess(pixel[2], 15)
+
     def test_lossless_png_mode_preserves_dimensions_and_png_format(self) -> None:
         image = Image.new("RGBA", (5, 3), (255, 0, 0, 128))
 
@@ -115,6 +174,11 @@ class ProcessImageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             process_image_bytes(
                 png_bytes(image),
+                crop_enabled=True,
+                crop_x=3,
+                crop_y=0,
+                crop_width=3,
+                crop_height=3,
                 resize_enabled=True,
                 target_width=0,
                 target_height=10,

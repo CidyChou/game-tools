@@ -29,7 +29,7 @@ http://192.168.113.225:8000/
 .venv/bin/python -m uvicorn web_app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-网页支持上传图片一键去背景、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet。
+网页支持上传图片一键去背景、裁剪 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet。
 
 处理默认目录：
 
@@ -106,4 +106,20 @@ curl -X POST http://127.0.0.1:8000/api/remove-background/batch \
   -F "mode=edge" \
   -F "threshold=245" \
   --output output/transparent-images.zip
+```
+
+裁剪、压缩或调整尺寸接口：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/process-image \
+  -F "image=@input/example.png" \
+  -F "crop_enabled=true" \
+  -F "crop_x=40" \
+  -F "crop_y=20" \
+  -F "crop_width=512" \
+  -F "crop_height=512" \
+  -F "compress_enabled=true" \
+  -F "png_mode=palette" \
+  -F "palette_colors=256" \
+  --output output/example-processed.png
 ```

@@ -42,7 +42,7 @@ class SpriteExportTests(unittest.TestCase):
 
         self.assertIn('id="importRemovedToProcess"', html)
         self.assertIn("导入到压缩", html)
-        self.assertIn('/static/app.js?v=20260602-import-remove-to-process', html)
+        self.assertIn('/static/app.js?v=20260612-crop-tool', html)
         self.assertIn('const importRemovedToProcess = $("importRemovedToProcess");', script)
         self.assertIn("function importRemovedResultToProcess()", script)
         self.assertIn("new File([blob]", script)

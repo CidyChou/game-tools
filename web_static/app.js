@@ -36,6 +36,8 @@ const processState = {
   naturalHeight: 0,
   aspectRatio: 1,
   syncingDimensions: false,
+  cropRect: { x: 0, y: 0, width: 0, height: 0 },
+  cropDrag: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -102,6 +104,8 @@ const videoFrameContext = videoFrameCanvas.getContext("2d");
 const videoSheetMetrics = $("videoSheetMetrics");
 const processInput = $("processInput");
 const processDropZone = $("processDropZone");
+const processCropCanvas = $("processCropCanvas");
+const processCropContext = processCropCanvas.getContext("2d");
 const processSourcePreview = $("processSourcePreview");
 const processResultPreview = $("processResultPreview");
 const processStatus = $("processStatus");
@@ -117,6 +121,12 @@ const processResizeInput = $("processResizeInput");
 const processCompressInput = $("processCompressInput");
 const processPngModeInput = $("processPngModeInput");
 const processPaletteColorsInput = $("processPaletteColorsInput");
+const processCropInput = $("processCropInput");
+const processCropXInput = $("processCropXInput");
+const processCropYInput = $("processCropYInput");
+const processCropWidthInput = $("processCropWidthInput");
+const processCropHeightInput = $("processCropHeightInput");
+const resetProcessCropButton = $("resetProcessCropButton");
 const navLinks = Array.from(document.querySelectorAll("[data-nav-link]"));
 const toolSections = navLinks
   .map((link) => document.querySelector(link.getAttribute("href")))
@@ -390,6 +400,179 @@ function updateProcessCompressionInputs() {
   processPaletteColorsInput.disabled = !paletteEnabled;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function setDefaultProcessCrop() {
+  processState.cropRect = {
+    x: 0,
+    y: 0,
+    width: processState.naturalWidth,
+    height: processState.naturalHeight,
+  };
+  syncProcessCropInputs();
+}
+
+function clampProcessCropRect(rect) {
+  const maxWidth = Math.max(1, processState.naturalWidth);
+  const maxHeight = Math.max(1, processState.naturalHeight);
+  const width = clamp(Math.round(rect.width), 1, maxWidth);
+  const height = clamp(Math.round(rect.height), 1, maxHeight);
+  const x = clamp(Math.round(rect.x), 0, maxWidth - width);
+  const y = clamp(Math.round(rect.y), 0, maxHeight - height);
+  return { x, y, width, height };
+}
+
+function syncProcessCropInputs() {
+  const { x, y, width, height } = processState.cropRect;
+  processCropXInput.value = String(x);
+  processCropYInput.value = String(y);
+  processCropWidthInput.value = String(width);
+  processCropHeightInput.value = String(height);
+}
+
+function readProcessCropInputs() {
+  processState.cropRect = clampProcessCropRect({
+    x: Number(processCropXInput.value) || 0,
+    y: Number(processCropYInput.value) || 0,
+    width: Number(processCropWidthInput.value) || 1,
+    height: Number(processCropHeightInput.value) || 1,
+  });
+  syncProcessCropInputs();
+}
+
+function updateProcessAspectRatio() {
+  if (processCropInput.checked && processState.cropRect.width > 0 && processState.cropRect.height > 0) {
+    processState.aspectRatio = processState.cropRect.width / processState.cropRect.height;
+  } else if (processState.naturalWidth > 0 && processState.naturalHeight > 0) {
+    processState.aspectRatio = processState.naturalWidth / processState.naturalHeight;
+  } else {
+    processState.aspectRatio = 1;
+  }
+}
+
+function syncProcessResizeToCurrentAspect() {
+  updateProcessAspectRatio();
+  if (processResizeInput.checked && processKeepAspectInput.checked) {
+    syncProcessDimension(processWidthInput);
+  }
+}
+
+function updateProcessCropControls() {
+  const enabled = processCropInput.checked && processState.naturalWidth > 0 && processState.naturalHeight > 0;
+  [processCropXInput, processCropYInput, processCropWidthInput, processCropHeightInput, resetProcessCropButton].forEach(
+    (control) => {
+      control.disabled = !enabled;
+    },
+  );
+  processCropCanvas.classList.toggle("hidden", !enabled);
+  syncProcessResizeToCurrentAspect();
+  drawProcessCropOverlay();
+}
+
+function drawProcessCropOverlay() {
+  const enabled = processCropInput.checked && processState.naturalWidth > 0 && processState.naturalHeight > 0;
+  processCropCanvas.width = Math.max(1, processState.naturalWidth);
+  processCropCanvas.height = Math.max(1, processState.naturalHeight);
+  processCropContext.clearRect(0, 0, processCropCanvas.width, processCropCanvas.height);
+
+  if (!enabled) return;
+
+  const { x, y, width, height } = processState.cropRect;
+  processCropContext.save();
+  processCropContext.fillStyle = "rgba(15, 23, 42, 0.42)";
+  processCropContext.fillRect(0, 0, processCropCanvas.width, processCropCanvas.height);
+  processCropContext.clearRect(x, y, width, height);
+  processCropContext.strokeStyle = "rgb(79, 70, 229)";
+  processCropContext.lineWidth = Math.max(2, Math.round(processCropCanvas.width / 360));
+  processCropContext.strokeRect(x, y, width, height);
+
+  const handleSize = Math.max(8, Math.round(Math.min(processCropCanvas.width, processCropCanvas.height) / 28));
+  processCropContext.fillStyle = "rgb(79, 70, 229)";
+  [
+    [x, y],
+    [x + width, y],
+    [x, y + height],
+    [x + width, y + height],
+  ].forEach(([handleX, handleY]) => {
+    processCropContext.fillRect(handleX - handleSize / 2, handleY - handleSize / 2, handleSize, handleSize);
+  });
+  processCropContext.restore();
+}
+
+function getProcessCropPoint(event) {
+  const bounds = processCropCanvas.getBoundingClientRect();
+  return {
+    x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * processCropCanvas.width,
+    y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * processCropCanvas.height,
+  };
+}
+
+function hitTestProcessCrop(point) {
+  const { x, y, width, height } = processState.cropRect;
+  const scale = processCropCanvas.width / Math.max(1, processCropCanvas.getBoundingClientRect().width);
+  const handle = 14 * scale;
+  const hits = [
+    ["nw", x, y],
+    ["ne", x + width, y],
+    ["sw", x, y + height],
+    ["se", x + width, y + height],
+  ];
+  const corner = hits.find(([, handleX, handleY]) => Math.abs(point.x - handleX) <= handle && Math.abs(point.y - handleY) <= handle);
+  if (corner) return corner[0];
+  if (point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height) {
+    return "move";
+  }
+  return "draw";
+}
+
+function updateProcessCropFromDrag(point) {
+  const drag = processState.cropDrag;
+  if (!drag) return;
+
+  const deltaX = point.x - drag.start.x;
+  const deltaY = point.y - drag.start.y;
+  const original = drag.original;
+  let next = original;
+
+  if (drag.mode === "move") {
+    next = {
+      ...original,
+      x: original.x + deltaX,
+      y: original.y + deltaY,
+    };
+  } else if (drag.mode === "draw") {
+    next = {
+      x: Math.min(drag.start.x, point.x),
+      y: Math.min(drag.start.y, point.y),
+      width: Math.abs(point.x - drag.start.x),
+      height: Math.abs(point.y - drag.start.y),
+    };
+  } else {
+    let left = original.x;
+    let top = original.y;
+    let right = original.x + original.width;
+    let bottom = original.y + original.height;
+    if (drag.mode.includes("n")) top = point.y;
+    if (drag.mode.includes("s")) bottom = point.y;
+    if (drag.mode.includes("w")) left = point.x;
+    if (drag.mode.includes("e")) right = point.x;
+    next = {
+      x: Math.min(left, right),
+      y: Math.min(top, bottom),
+      width: Math.abs(right - left),
+      height: Math.abs(bottom - top),
+    };
+  }
+
+  processState.cropRect = clampProcessCropRect(next);
+  syncProcessCropInputs();
+  syncProcessResizeToCurrentAspect();
+  drawProcessCropOverlay();
+  resetProcessedResult();
+}
+
 function syncProcessDimension(changedInput) {
   if (
     processState.syncingDimensions ||
@@ -419,8 +602,12 @@ function handleProcessFiles(files) {
   processState.naturalWidth = 0;
   processState.naturalHeight = 0;
   processState.aspectRatio = 1;
+  processState.cropRect = { x: 0, y: 0, width: 0, height: 0 };
+  processState.cropDrag = null;
   revokeUrl("sourceUrl", processState);
   resetProcessedResult();
+  syncProcessCropInputs();
+  updateProcessCropControls();
 
   processState.sourceUrl = URL.createObjectURL(file);
   processSourcePreview.src = processState.sourceUrl;
@@ -436,6 +623,8 @@ function handleProcessFiles(files) {
     processState.naturalWidth = image.naturalWidth;
     processState.naturalHeight = image.naturalHeight;
     processState.aspectRatio = image.naturalWidth / image.naturalHeight;
+    setDefaultProcessCrop();
+    updateProcessCropControls();
     processWidthInput.value = String(image.naturalWidth);
     processHeightInput.value = String(image.naturalHeight);
     processSourceMetrics.textContent = `${image.naturalWidth}x${image.naturalHeight}，${formatBytes(file.size)}`;
@@ -457,6 +646,11 @@ async function processImage() {
   const form = new FormData();
   form.append("image", processState.file);
   form.append("compress_enabled", processCompressInput.checked ? "true" : "false");
+  form.append("crop_enabled", processCropInput.checked ? "true" : "false");
+  form.append("crop_x", processCropXInput.value || "0");
+  form.append("crop_y", processCropYInput.value || "0");
+  form.append("crop_width", processCropWidthInput.value || "0");
+  form.append("crop_height", processCropHeightInput.value || "0");
   form.append("resize_enabled", processResizeInput.checked ? "true" : "false");
   form.append("target_width", processWidthInput.value || "0");
   form.append("target_height", processHeightInput.value || "0");
@@ -1591,6 +1785,52 @@ processPngModeInput.addEventListener("change", () => {
   resetProcessedResult();
 });
 processPaletteColorsInput.addEventListener("change", resetProcessedResult);
+processCropInput.addEventListener("change", () => {
+  if (processCropInput.checked && processState.cropRect.width <= 0) {
+    setDefaultProcessCrop();
+  }
+  updateProcessCropControls();
+  resetProcessedResult();
+});
+[processCropXInput, processCropYInput, processCropWidthInput, processCropHeightInput].forEach((input) => {
+  input.addEventListener("input", () => {
+    readProcessCropInputs();
+    syncProcessResizeToCurrentAspect();
+    drawProcessCropOverlay();
+    resetProcessedResult();
+  });
+});
+resetProcessCropButton.addEventListener("click", () => {
+  setDefaultProcessCrop();
+  syncProcessResizeToCurrentAspect();
+  drawProcessCropOverlay();
+  resetProcessedResult();
+});
+processCropCanvas.addEventListener("pointerdown", (event) => {
+  if (!processCropInput.checked || !processState.naturalWidth || !processState.naturalHeight) return;
+  event.preventDefault();
+  const start = getProcessCropPoint(event);
+  processState.cropDrag = {
+    mode: hitTestProcessCrop(start),
+    start,
+    original: { ...processState.cropRect },
+  };
+  processCropCanvas.setPointerCapture(event.pointerId);
+});
+processCropCanvas.addEventListener("pointermove", (event) => {
+  if (!processState.cropDrag) return;
+  event.preventDefault();
+  updateProcessCropFromDrag(getProcessCropPoint(event));
+});
+["pointerup", "pointercancel"].forEach((eventName) => {
+  processCropCanvas.addEventListener(eventName, (event) => {
+    if (processState.cropDrag && processCropCanvas.hasPointerCapture(event.pointerId)) {
+      processCropCanvas.releasePointerCapture(event.pointerId);
+    }
+    processState.cropDrag = null;
+  });
+});
+window.addEventListener("resize", drawProcessCropOverlay);
 
 [
   "columnsInput",

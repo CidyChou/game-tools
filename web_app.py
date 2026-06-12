@@ -57,9 +57,32 @@ def _resize_dimensions(
     return target_width, target_height
 
 
+def _crop_box(
+    source_width: int,
+    source_height: int,
+    crop_x: int,
+    crop_y: int,
+    crop_width: int,
+    crop_height: int,
+) -> tuple[int, int, int, int]:
+    if crop_width <= 0 or crop_height <= 0:
+        raise ValueError("crop width and height are required")
+    if crop_x < 0 or crop_y < 0:
+        raise ValueError("crop x and y must be greater than or equal to 0")
+    if crop_x + crop_width > source_width or crop_y + crop_height > source_height:
+        raise ValueError("crop box must stay inside the image")
+
+    return crop_x, crop_y, crop_x + crop_width, crop_y + crop_height
+
+
 def process_image_bytes(
     raw: bytes,
     *,
+    crop_enabled: bool = False,
+    crop_x: int = 0,
+    crop_y: int = 0,
+    crop_width: int = 0,
+    crop_height: int = 0,
     resize_enabled: bool,
     target_width: int,
     target_height: int,
@@ -76,16 +99,28 @@ def process_image_bytes(
     source = _open_uploaded_image(raw)
     source_width, source_height = source.size
     result = source
+    applied_crop = (0, 0, source_width, source_height)
+
+    if crop_enabled:
+        applied_crop = _crop_box(
+            source_width,
+            source_height,
+            crop_x,
+            crop_y,
+            crop_width,
+            crop_height,
+        )
+        result = source.crop(applied_crop)
 
     if resize_enabled:
         output_size = _resize_dimensions(
-            source_width,
-            source_height,
+            result.size[0],
+            result.size[1],
             target_width,
             target_height,
             keep_aspect_ratio,
         )
-        result = source.resize(output_size, Image.Resampling.LANCZOS)
+        result = result.resize(output_size, Image.Resampling.LANCZOS)
 
     output = BytesIO()
     if compress_enabled and png_mode == "palette":
@@ -105,6 +140,10 @@ def process_image_bytes(
         "source_height": str(source_height),
         "output_width": str(output_width),
         "output_height": str(output_height),
+        "crop_x": str(applied_crop[0]),
+        "crop_y": str(applied_crop[1]),
+        "crop_width": str(applied_crop[2] - applied_crop[0]),
+        "crop_height": str(applied_crop[3] - applied_crop[1]),
         "source_bytes": str(len(raw)),
         "output_bytes": str(len(processed)),
         "palette_colors": str(palette_colors if compress_enabled and png_mode == "palette" else 0),
@@ -276,6 +315,11 @@ async def remove_background_batch(
 async def process_image(
     image: UploadFile = File(...),
     compress_enabled: bool = Form(True),
+    crop_enabled: bool = Form(False),
+    crop_x: int = Form(0),
+    crop_y: int = Form(0),
+    crop_width: int = Form(0),
+    crop_height: int = Form(0),
     resize_enabled: bool = Form(False),
     target_width: int = Form(0),
     target_height: int = Form(0),
@@ -292,6 +336,11 @@ async def process_image(
         result, metadata = process_image_bytes(
             raw,
             compress_enabled=compress_enabled,
+            crop_enabled=crop_enabled,
+            crop_x=crop_x,
+            crop_y=crop_y,
+            crop_width=crop_width,
+            crop_height=crop_height,
             resize_enabled=resize_enabled,
             target_width=target_width,
             target_height=target_height,
@@ -311,6 +360,10 @@ async def process_image(
             "X-Source-Height": metadata["source_height"],
             "X-Output-Width": metadata["output_width"],
             "X-Output-Height": metadata["output_height"],
+            "X-Crop-X": metadata["crop_x"],
+            "X-Crop-Y": metadata["crop_y"],
+            "X-Crop-Width": metadata["crop_width"],
+            "X-Crop-Height": metadata["crop_height"],
             "X-Source-Bytes": metadata["source_bytes"],
             "X-Output-Bytes": metadata["output_bytes"],
             "X-Palette-Colors": metadata["palette_colors"],
