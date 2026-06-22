@@ -9,6 +9,8 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
+音频转 OGG 功能需要系统已安装 `ffmpeg`，并且 `ffmpeg` 可在 `PATH` 中直接执行。
+
 ## 使用
 
 启动 Web 工具台：
@@ -29,7 +31,7 @@ http://192.168.113.225:8000/
 .venv/bin/python -m uvicorn web_app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-网页支持上传图片一键去背景、裁剪 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet。
+网页支持上传图片一键去背景、裁剪 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet，以及上传 MP3 转成压缩后的 OGG / Vorbis 音频。
 
 处理默认目录：
 
@@ -123,3 +125,14 @@ curl -X POST http://127.0.0.1:8000/api/process-image \
   -F "palette_colors=256" \
   --output output/example-processed.png
 ```
+
+MP3 转 OGG / Vorbis 接口：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/convert-audio \
+  -F "audio=@input/example.mp3" \
+  -F "quality=small" \
+  --output output/example.ogg
+```
+
+`quality` 支持 `small`（默认，更小体积）、`balanced`、`clear` 三档。

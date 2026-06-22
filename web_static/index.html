@@ -55,7 +55,7 @@
               <h1 class="text-2xl font-semibold tracking-normal text-slate-950 sm:text-3xl">游戏素材工作台</h1>
             </div>
             <p class="hidden max-w-2xl text-sm leading-6 text-slate-600 sm:block">
-              本地上传，本地处理。快速完成透明底抠除、sprite sheet 检查、视频截帧和 PNG 压缩。
+              本地上传，本地处理。快速完成透明底抠除、sprite sheet 检查、视频截帧、音频转 OGG 和 PNG 压缩。
             </p>
           </div>
           <nav class="-mx-1 overflow-x-auto pb-1" aria-label="工具导航">
@@ -63,6 +63,7 @@
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-remove" data-nav-link>背景抠除</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-sprite" data-nav-link>序列帧预览</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-video" data-nav-link>视频转帧</a>
+              <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-audio" data-nav-link>音频转 OGG</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-process" data-nav-link>压缩 / 裁剪</a>
             </div>
           </nav>
@@ -402,11 +403,77 @@
           </div>
         </section>
 
+        <section id="tool-audio" class="tool-section rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-900/5 sm:p-6" aria-labelledby="audio-title">
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="space-y-2">
+              <p class="text-xs font-bold uppercase tracking-normal text-indigo-700">Tool 04</p>
+              <h2 id="audio-title" class="text-2xl font-semibold tracking-normal text-slate-950">MP3 转 OGG</h2>
+              <p class="max-w-2xl text-sm leading-6 text-slate-600">上传单个 MP3，转成更适合游戏素材打包的 OGG / Vorbis，并按预设压缩体积。</p>
+            </div>
+            <span id="audioStatus" class="w-fit rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">待上传</span>
+          </div>
+
+          <div class="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <div class="flex flex-col gap-6">
+              <label id="audioDropZone" for="audioInput" class="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center shadow-inner shadow-slate-900/5 transition-all duration-200 hover:border-indigo-400 hover:bg-white/80 focus-within:outline focus-within:outline-4 focus-within:outline-indigo-200">
+                <input id="audioInput" class="sr-only" type="file" accept=".mp3,audio/mpeg">
+                <span class="text-base font-semibold text-slate-950">上传 MP3</span>
+                <span class="mt-2 text-sm text-slate-500">单文件转换，输出 OGG / Vorbis</span>
+              </label>
+
+              <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-inner shadow-slate-900/5">
+                <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <span class="text-sm font-bold text-slate-700">音频预览</span>
+                  <output id="audioPreviewName" class="text-sm font-medium text-slate-500">未选择</output>
+                </div>
+                <audio id="audioPreview" class="w-full" controls preload="metadata"></audio>
+              </div>
+            </div>
+
+            <aside class="flex flex-col gap-6">
+              <div class="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-900/5">
+                <label class="grid gap-2 text-sm font-medium text-slate-600">
+                  <span>压缩预设</span>
+                  <select id="audioQualityInput" class="min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-950 shadow-sm outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100">
+                    <option value="small" selected>更小体积</option>
+                    <option value="balanced">均衡</option>
+                    <option value="clear">清晰优先</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-900/5">
+                <dl class="grid gap-3 text-sm">
+                  <div class="flex items-center justify-between gap-4">
+                    <dt class="text-slate-500">原始体积</dt>
+                    <dd id="audioSourceMetrics" class="font-bold text-slate-800">-</dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <dt class="text-slate-500">输出体积</dt>
+                    <dd id="audioOutputMetrics" class="font-bold text-slate-800">-</dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <dt class="text-slate-500">编码</dt>
+                    <dd id="audioCodecValue" class="font-bold text-slate-800">-</dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div class="grid gap-3">
+                <button id="convertAudioButton" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-200 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled>转换为 OGG</button>
+                <a id="downloadAudio" class="inline-flex min-h-11 cursor-not-allowed items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-400 shadow-sm transition-all duration-200" aria-disabled="true">下载 OGG</a>
+              </div>
+
+              <p id="audioFeedback" class="min-h-6 text-sm leading-6 text-slate-500" role="status" aria-live="polite"></p>
+            </aside>
+          </div>
+        </section>
+
         <section id="tool-process" class="tool-section grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]" aria-labelledby="process-title">
           <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-900/5 sm:p-6">
             <div class="flex items-start justify-between gap-4">
               <div class="space-y-2">
-                <p class="text-xs font-bold uppercase tracking-normal text-indigo-700">Tool 04</p>
+                <p class="text-xs font-bold uppercase tracking-normal text-indigo-700">Tool 05</p>
                 <h2 id="process-title" class="text-2xl font-semibold tracking-normal text-slate-950">图片压缩 / 裁剪 / 调整尺寸</h2>
               </div>
               <span id="processStatus" class="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">待上传</span>
@@ -538,6 +605,6 @@
       </main>
     </div>
 
-    <script src="/static/app.js?v=20260612-crop-tool" defer></script>
+    <script src="/static/app.js?v=20260622-audio-tool" defer></script>
   </body>
 </html>

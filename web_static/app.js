@@ -28,6 +28,12 @@ const videoState = {
   generating: false,
 };
 
+const audioState = {
+  file: null,
+  sourceUrl: "",
+  resultUrl: "",
+};
+
 const processState = {
   file: null,
   sourceUrl: "",
@@ -102,6 +108,18 @@ const videoSheetContext = videoSheetCanvas.getContext("2d");
 const videoFrameCanvas = $("videoFrameCanvas");
 const videoFrameContext = videoFrameCanvas.getContext("2d");
 const videoSheetMetrics = $("videoSheetMetrics");
+const audioInput = $("audioInput");
+const audioDropZone = $("audioDropZone");
+const audioPreview = $("audioPreview");
+const audioPreviewName = $("audioPreviewName");
+const audioStatus = $("audioStatus");
+const audioQualityInput = $("audioQualityInput");
+const audioSourceMetrics = $("audioSourceMetrics");
+const audioOutputMetrics = $("audioOutputMetrics");
+const audioCodecValue = $("audioCodecValue");
+const convertAudioButton = $("convertAudioButton");
+const downloadAudio = $("downloadAudio");
+const audioFeedback = $("audioFeedback");
 const processInput = $("processInput");
 const processDropZone = $("processDropZone");
 const processCropCanvas = $("processCropCanvas");
@@ -1720,9 +1738,98 @@ async function generateVideoFrames() {
   }
 }
 
+function resetAudioResult() {
+  revokeUrl("resultUrl", audioState);
+  disableDownloadLink(downloadAudio);
+  audioOutputMetrics.textContent = "-";
+  audioCodecValue.textContent = "-";
+}
+
+function handleAudioFiles(files) {
+  const file = files?.[0];
+  if (!file) return;
+
+  revokeUrl("sourceUrl", audioState);
+  resetAudioResult();
+  audioState.file = null;
+  audioPreview.removeAttribute("src");
+  audioPreviewName.textContent = "未选择";
+  audioSourceMetrics.textContent = "-";
+
+  if (!file.name.toLowerCase().endsWith(".mp3")) {
+    audioStatus.textContent = "失败";
+    convertAudioButton.disabled = true;
+    setFeedback(audioFeedback, "请选择 MP3 文件。", "error");
+    return;
+  }
+
+  audioState.file = file;
+  audioState.sourceUrl = URL.createObjectURL(file);
+  audioPreview.src = audioState.sourceUrl;
+  audioPreviewName.textContent = file.name;
+  audioSourceMetrics.textContent = formatBytes(file.size);
+  audioStatus.textContent = "已选择";
+  convertAudioButton.disabled = false;
+  setFeedback(audioFeedback, `${file.name}，${formatBytes(file.size)}`);
+}
+
+async function convertAudio() {
+  if (!audioState.file) return;
+
+  const form = new FormData();
+  form.append("audio", audioState.file);
+  form.append("quality", audioQualityInput.value);
+
+  convertAudioButton.disabled = true;
+  convertAudioButton.textContent = "转换中...";
+  audioStatus.textContent = "转换中";
+  resetAudioResult();
+  setFeedback(audioFeedback, "正在转成 OGG / Vorbis。");
+
+  try {
+    const response = await fetch("/api/convert-audio", {
+      method: "POST",
+      body: form,
+    });
+
+    if (!response.ok) {
+      let message = "转换失败";
+      try {
+        const error = await response.json();
+        message = error.detail || message;
+      } catch {
+        message = await response.text();
+      }
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    revokeUrl("resultUrl", audioState);
+    audioState.resultUrl = URL.createObjectURL(blob);
+    const filename = `${audioState.file.name.replace(/\.[^.]+$/, "") || "audio"}.ogg`;
+    enableDownloadLink(downloadAudio, audioState.resultUrl, filename);
+
+    const sourceBytes = Number(response.headers.get("X-Source-Bytes") || audioState.file.size);
+    const outputBytes = Number(response.headers.get("X-Output-Bytes") || blob.size);
+    const saved = sourceBytes > 0 ? Math.max(0, 100 - (outputBytes / sourceBytes) * 100) : 0;
+    const codec = response.headers.get("X-Audio-Codec") || "vorbis";
+    audioOutputMetrics.textContent = formatBytes(outputBytes);
+    audioCodecValue.textContent = codec;
+    audioStatus.textContent = "完成";
+    setFeedback(audioFeedback, `完成，体积减少 ${saved.toFixed(1)}%。`, "success");
+  } catch (error) {
+    audioStatus.textContent = "失败";
+    setFeedback(audioFeedback, error.message, "error");
+  } finally {
+    convertAudioButton.disabled = !audioState.file;
+    convertAudioButton.textContent = "转换为 OGG";
+  }
+}
+
 wireDropZone(imageDropZone, imageInput, handleImageFiles);
 wireDropZone(spriteDropZone, spriteInput, handleSpriteFiles);
 wireDropZone(videoDropZone, videoInput, handleVideoFiles);
+wireDropZone(audioDropZone, audioInput, handleAudioFiles);
 wireDropZone(processDropZone, processInput, handleProcessFiles);
 wireNavigation();
 
@@ -1733,6 +1840,7 @@ playButton.addEventListener("click", toggleSprite);
 prevFrameButton.addEventListener("click", () => stepFrame(-1));
 nextFrameButton.addEventListener("click", () => stepFrame(1));
 generateVideoFramesButton.addEventListener("click", generateVideoFrames);
+convertAudioButton.addEventListener("click", convertAudio);
 setBaseFrameButton.addEventListener("click", () => {
   baseFrameInput.value = String(spriteState.currentFrame + 1);
   invalidateAlignment();
@@ -1746,6 +1854,11 @@ videoPreview.addEventListener("error", () => {
   videoStatus.textContent = "失败";
   setFeedback(videoFeedback, "浏览器无法读取这个视频，请换 MP4/WebM 或更常见编码。", "error");
 });
+audioPreview.addEventListener("error", () => {
+  if (!audioState.file) return;
+  audioStatus.textContent = "预览失败";
+  setFeedback(audioFeedback, "浏览器无法预览这个 MP3，但仍可尝试转换。", "error");
+});
 frameSlider.addEventListener("input", () => {
   spriteState.currentFrame = Number(frameSlider.value);
   drawSpriteFrame();
@@ -1757,6 +1870,13 @@ frameSlider.addEventListener("input", () => {
 
 ["videoFpsInput", "videoColumnsInput", "videoFrameWidthInput"].forEach((id) => {
   $(id).addEventListener("input", () => updateVideoSummary());
+});
+
+audioQualityInput.addEventListener("change", () => {
+  resetAudioResult();
+  if (audioState.file) {
+    setFeedback(audioFeedback, `${audioState.file.name}，${formatBytes(audioState.file.size)}`);
+  }
 });
 
 [processWidthInput, processHeightInput].forEach((input) => {
@@ -1914,6 +2034,12 @@ downloadProcessed.addEventListener("click", (event) => {
 
 downloadVideoSheet.addEventListener("click", (event) => {
   if (downloadVideoSheet.getAttribute("aria-disabled") === "true") {
+    event.preventDefault();
+  }
+});
+
+downloadAudio.addEventListener("click", (event) => {
+  if (downloadAudio.getAttribute("aria-disabled") === "true") {
     event.preventDefault();
   }
 });

@@ -5,6 +5,9 @@ from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import tempfile
 import zipfile
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -23,6 +26,13 @@ from remove_bg import (
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web_static"
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+MP3_EXTENSION = ".mp3"
+VORBIS_QUALITY_PRESETS = {
+    "small": "3",
+    "balanced": "4",
+    "clear": "5",
+}
+FFMPEG_TIMEOUT_SECONDS = 120
 
 app = FastAPI(title="PNG Tools Web")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -163,6 +173,113 @@ def _validate_image_suffix(filename: str | None) -> None:
     suffix = Path(filename or "").suffix.lower()
     if suffix and suffix not in IMAGE_EXTENSIONS:
         raise ValueError("unsupported image format")
+
+
+def validate_audio_upload(filename: str | None, raw: bytes) -> None:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix != MP3_EXTENSION:
+        raise ValueError("unsupported audio format; only MP3 is supported")
+    if not raw:
+        raise ValueError("empty audio upload")
+
+
+def _audio_output_name(filename: str | None) -> str:
+    stem = Path(filename or "").stem or "audio"
+    safe_stem = FILENAME_SAFE_PATTERN.sub("_", stem).strip("._-") or "audio"
+    return f"{safe_stem}.ogg"
+
+
+def _require_executable(name: str) -> str:
+    executable = shutil.which(name)
+    if executable is None:
+        raise ValueError(f"{name} is required for audio conversion")
+    return executable
+
+
+def _available_ffmpeg_encoders(ffmpeg: str) -> str:
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=FFMPEG_TIMEOUT_SECONDS,
+        )
+    except subprocess.SubprocessError as exc:
+        raise ValueError("unable to inspect ffmpeg encoders") from exc
+
+    return completed.stdout
+
+
+def _select_vorbis_encoder(ffmpeg: str) -> tuple[str, list[str]]:
+    encoders = _available_ffmpeg_encoders(ffmpeg)
+    if re.search(r"^ A\S*\s+libvorbis\s", encoders, flags=re.MULTILINE):
+        return "libvorbis", []
+    if re.search(r"^ A\S*\s+vorbis\s", encoders, flags=re.MULTILINE):
+        return "vorbis", ["-strict", "-2"]
+    raise ValueError("ffmpeg does not provide a Vorbis audio encoder")
+
+
+def convert_mp3_to_ogg_bytes(raw: bytes, *, quality: str) -> tuple[bytes, dict[str, str]]:
+    if quality not in VORBIS_QUALITY_PRESETS:
+        raise ValueError("quality must be small, balanced, or clear")
+    if not raw:
+        raise ValueError("empty audio upload")
+
+    ffmpeg = _require_executable("ffmpeg")
+    encoder, encoder_flags = _select_vorbis_encoder(ffmpeg)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        temp_dir = Path(tmp)
+        input_file = temp_dir / "input.mp3"
+        output_file = temp_dir / "output.ogg"
+        input_file.write_bytes(raw)
+
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(input_file),
+            "-vn",
+            "-ac",
+            "2",
+            "-c:a",
+            encoder,
+            *encoder_flags,
+            "-q:a",
+            VORBIS_QUALITY_PRESETS[quality],
+            str(output_file),
+        ]
+
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=FFMPEG_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("audio conversion timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "").strip()
+            message = f"audio conversion failed: {detail}" if detail else "audio conversion failed"
+            raise ValueError(message) from exc
+
+        if not output_file.exists() or output_file.stat().st_size == 0:
+            raise ValueError("audio conversion produced an empty output")
+
+        converted = output_file.read_bytes()
+
+    return converted, {
+        "source_bytes": str(len(raw)),
+        "output_bytes": str(len(converted)),
+        "audio_codec": "vorbis",
+        "audio_quality": quality,
+    }
 
 
 def _zip_output_name(filename: str | None, index: int, used_names: set[str]) -> str:
@@ -367,5 +484,30 @@ async def process_image(
             "X-Source-Bytes": metadata["source_bytes"],
             "X-Output-Bytes": metadata["output_bytes"],
             "X-Palette-Colors": metadata["palette_colors"],
+        },
+    )
+
+
+@app.post("/api/convert-audio")
+async def convert_audio(
+    audio: UploadFile = File(...),
+    quality: str = Form("small"),
+) -> Response:
+    raw = await audio.read()
+    try:
+        validate_audio_upload(audio.filename, raw)
+        result, metadata = convert_mp3_to_ogg_bytes(raw, quality=quality)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return Response(
+        content=result,
+        media_type="audio/ogg",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_audio_output_name(audio.filename)}"',
+            "X-Source-Bytes": metadata["source_bytes"],
+            "X-Output-Bytes": metadata["output_bytes"],
+            "X-Audio-Codec": metadata["audio_codec"],
+            "X-Audio-Quality": metadata["audio_quality"],
         },
     )
