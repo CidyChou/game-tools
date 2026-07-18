@@ -25,12 +25,15 @@ class AudioEditorUiTests(unittest.TestCase):
         self.assertIn(".wav", html)
         self.assertIn(".flac", html)
         self.assertIn(".m4a", html)
+        self.assertIn("裁剪并导出原格式", html)
 
     def test_conversion_submits_selected_audio_range(self) -> None:
         script = (BASE_DIR / "web_static" / "app.js").read_text()
 
         self.assertIn('form.append("start_time"', script)
         self.assertIn('form.append("end_time"', script)
+        self.assertIn("-trimmed${suffix}", script)
+        self.assertIn("X-Audio-Format", script)
 
 
 if __name__ == "__main__":

@@ -58,9 +58,39 @@ def build_test_wav(duration: float = 2.0) -> bytes:
         return output.read_bytes()
 
 
-def probe_ogg(raw: bytes) -> dict[str, str]:
+def build_test_audio(suffix: str, encoder: str, *, channels: int = 1) -> bytes:
     with tempfile.TemporaryDirectory() as tmp:
-        source = Path(tmp) / "output.ogg"
+        output = Path(tmp) / f"tone{suffix}"
+        encoder_flags = ["-strict", "-2"] if encoder == "vorbis" else []
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-ac",
+                str(channels),
+                "-c:a",
+                encoder,
+                *encoder_flags,
+                str(output),
+            ],
+            check=True,
+        )
+        return output.read_bytes()
+
+
+def probe_ogg(raw: bytes) -> dict[str, str]:
+    return probe_audio(raw, ".ogg")
+
+
+def probe_audio(raw: bytes, suffix: str) -> dict[str, str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / f"output{suffix}"
         source.write_bytes(raw)
         completed = subprocess.run(
             [
@@ -170,6 +200,37 @@ class ConvertAudioTests(unittest.TestCase):
         self.assertAlmostEqual(probe_duration(converted, ".ogg"), 0.8, delta=0.08)
         self.assertEqual(metadata["trim_start"], "0.400")
         self.assertEqual(metadata["trim_end"], "1.200")
+
+    def test_trims_and_preserves_each_supported_audio_format(self) -> None:
+        vorbis_encoder, _ = web_app._select_vorbis_encoder(shutil.which("ffmpeg") or "ffmpeg")
+        formats = {
+            ".mp3": ("libmp3lame", "mp3", "mp3", 1),
+            ".wav": ("pcm_s16le", "wav", "pcm_s16le", 1),
+            ".flac": ("flac", "flac", "flac", 1),
+            ".m4a": ("aac", "m4a", "aac", 1),
+            ".aac": ("aac", "aac", "aac", 1),
+            ".ogg": (vorbis_encoder, "ogg", "vorbis", 2),
+            ".oga": (vorbis_encoder, "ogg", "vorbis", 2),
+            ".opus": ("libopus", "ogg", "opus", 1),
+        }
+
+        for suffix, (source_encoder, expected_container, expected_codec, channels) in formats.items():
+            with self.subTest(suffix=suffix):
+                source = build_test_audio(suffix, source_encoder, channels=channels)
+                trimmed, metadata = web_app.trim_audio_bytes(
+                    source,
+                    input_suffix=suffix,
+                    quality="balanced",
+                    start_time=0.2,
+                    end_time=0.7,
+                )
+                probed = probe_audio(trimmed, suffix)
+
+                self.assertIn(expected_container, probed["format_name"])
+                self.assertEqual(probed["codec_name"], expected_codec)
+                self.assertAlmostEqual(probe_duration(trimmed, suffix), 0.5, delta=0.1)
+                self.assertEqual(metadata["audio_format"], suffix.removeprefix(".").upper())
+                self.assertEqual(metadata["audio_codec"], expected_codec)
 
     def test_rejects_invalid_audio_trim_range(self) -> None:
         source = build_test_wav()

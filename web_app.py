@@ -35,6 +35,31 @@ VORBIS_QUALITY_PRESETS = {
     "balanced": "4",
     "clear": "5",
 }
+MP3_QUALITY_PRESETS = {
+    "small": "5",
+    "balanced": "3",
+    "clear": "1",
+}
+AAC_BITRATE_PRESETS = {
+    "small": "96k",
+    "balanced": "160k",
+    "clear": "256k",
+}
+OPUS_BITRATE_PRESETS = {
+    "small": "64k",
+    "balanced": "128k",
+    "clear": "192k",
+}
+AUDIO_MEDIA_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/opus",
+}
 FFMPEG_TIMEOUT_SECONDS = 120
 
 app = FastAPI(title="PNG Tools Web")
@@ -205,10 +230,11 @@ def _validate_audio_trim(start_time: float, end_time: float | None) -> tuple[flo
     return start_time, end_time
 
 
-def _audio_output_name(filename: str | None) -> str:
+def _audio_output_name(filename: str | None, output_suffix: str) -> str:
+    suffix = _validate_audio_input_suffix(output_suffix)
     stem = Path(filename or "").stem or "audio"
     safe_stem = FILENAME_SAFE_PATTERN.sub("_", stem).strip("._-") or "audio"
-    return f"{safe_stem}.ogg"
+    return f"{safe_stem}-trimmed{suffix}"
 
 
 def _require_executable(name: str) -> str:
@@ -242,10 +268,33 @@ def _select_vorbis_encoder(ffmpeg: str) -> tuple[str, list[str]]:
     raise ValueError("ffmpeg does not provide a Vorbis audio encoder")
 
 
-def convert_audio_to_ogg_bytes(
+def _audio_encoding_settings(
+    output_suffix: str,
+    *,
+    quality: str,
+    ffmpeg: str,
+) -> tuple[str, str, list[str]]:
+    if output_suffix in {".ogg", ".oga"}:
+        encoder, encoder_flags = _select_vorbis_encoder(ffmpeg)
+        return "vorbis", encoder, [*encoder_flags, "-ac", "2", "-q:a", VORBIS_QUALITY_PRESETS[quality]]
+    if output_suffix == ".opus":
+        return "opus", "libopus", ["-b:a", OPUS_BITRATE_PRESETS[quality]]
+    if output_suffix == ".mp3":
+        return "mp3", "libmp3lame", ["-q:a", MP3_QUALITY_PRESETS[quality]]
+    if output_suffix in {".m4a", ".aac"}:
+        return "aac", "aac", ["-b:a", AAC_BITRATE_PRESETS[quality]]
+    if output_suffix == ".flac":
+        return "flac", "flac", ["-compression_level", "8"]
+    if output_suffix == ".wav":
+        return "pcm_s16le", "pcm_s16le", []
+    raise ValueError("unsupported audio format")
+
+
+def trim_audio_bytes(
     raw: bytes,
     *,
     input_suffix: str,
+    output_suffix: str | None = None,
     quality: str,
     start_time: float = 0,
     end_time: float | None = None,
@@ -255,15 +304,20 @@ def convert_audio_to_ogg_bytes(
     if not raw:
         raise ValueError("empty audio upload")
     suffix = _validate_audio_input_suffix(input_suffix)
+    target_suffix = _validate_audio_input_suffix(output_suffix or suffix)
     start_time, end_time = _validate_audio_trim(start_time, end_time)
 
     ffmpeg = _require_executable("ffmpeg")
-    encoder, encoder_flags = _select_vorbis_encoder(ffmpeg)
+    codec, encoder, encoder_flags = _audio_encoding_settings(
+        target_suffix,
+        quality=quality,
+        ffmpeg=ffmpeg,
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         temp_dir = Path(tmp)
         input_file = temp_dir / f"input{suffix}"
-        output_file = temp_dir / "output.ogg"
+        output_file = temp_dir / f"output{target_suffix}"
         input_file.write_bytes(raw)
 
         trim_flags = []
@@ -284,13 +338,9 @@ def convert_audio_to_ogg_bytes(
             "-vn",
             "-map",
             "0:a:0",
-            "-ac",
-            "2",
             "-c:a",
             encoder,
             *encoder_flags,
-            "-q:a",
-            VORBIS_QUALITY_PRESETS[quality],
             str(output_file),
         ]
 
@@ -317,11 +367,30 @@ def convert_audio_to_ogg_bytes(
     return converted, {
         "source_bytes": str(len(raw)),
         "output_bytes": str(len(converted)),
-        "audio_codec": "vorbis",
+        "audio_codec": codec,
+        "audio_format": target_suffix.removeprefix(".").upper(),
         "audio_quality": quality,
         "trim_start": f"{start_time:.3f}",
         "trim_end": f"{end_time:.3f}" if end_time is not None else "",
     }
+
+
+def convert_audio_to_ogg_bytes(
+    raw: bytes,
+    *,
+    input_suffix: str,
+    quality: str,
+    start_time: float = 0,
+    end_time: float | None = None,
+) -> tuple[bytes, dict[str, str]]:
+    return trim_audio_bytes(
+        raw,
+        input_suffix=input_suffix,
+        output_suffix=".ogg",
+        quality=quality,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
 
 def convert_mp3_to_ogg_bytes(raw: bytes, *, quality: str) -> tuple[bytes, dict[str, str]]:
@@ -617,9 +686,10 @@ async def convert_audio(
     raw = await audio.read()
     try:
         validate_audio_upload(audio.filename, raw)
-        result, metadata = convert_audio_to_ogg_bytes(
+        output_suffix = _validate_audio_input_suffix(Path(audio.filename or "").suffix)
+        result, metadata = trim_audio_bytes(
             raw,
-            input_suffix=Path(audio.filename or "").suffix,
+            input_suffix=output_suffix,
             quality=quality,
             start_time=start_time,
             end_time=end_time,
@@ -629,12 +699,13 @@ async def convert_audio(
 
     return Response(
         content=result,
-        media_type="audio/ogg",
+        media_type=AUDIO_MEDIA_TYPES[output_suffix],
         headers={
-            "Content-Disposition": f'attachment; filename="{_audio_output_name(audio.filename)}"',
+            "Content-Disposition": f'attachment; filename="{_audio_output_name(audio.filename, output_suffix)}"',
             "X-Source-Bytes": metadata["source_bytes"],
             "X-Output-Bytes": metadata["output_bytes"],
             "X-Audio-Codec": metadata["audio_codec"],
+            "X-Audio-Format": metadata["audio_format"],
             "X-Audio-Quality": metadata["audio_quality"],
             "X-Trim-Start": metadata["trim_start"],
             "X-Trim-End": metadata["trim_end"],

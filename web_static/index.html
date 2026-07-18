@@ -63,7 +63,7 @@
               <h1 class="text-2xl font-semibold tracking-normal text-slate-950 sm:text-3xl">游戏素材工作台</h1>
             </div>
             <p class="hidden max-w-2xl text-sm leading-6 text-slate-600 sm:block">
-              本地上传，本地处理。快速完成透明底抠除、sprite sheet 检查、视频截帧、音频转 OGG 和 PNG 压缩。
+              本地上传，本地处理。快速完成透明底抠除、sprite sheet 检查、视频截帧、原格式音频裁剪和 PNG 压缩。
             </p>
           </div>
           <nav class="-mx-1 overflow-x-auto pb-1" aria-label="工具导航">
@@ -71,7 +71,7 @@
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-remove" data-nav-link>背景抠除</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-sprite" data-nav-link>序列帧预览</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-video" data-nav-link>视频转帧</a>
-              <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-audio" data-nav-link>音频转 OGG</a>
+              <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-audio" data-nav-link>音频裁剪</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-process" data-nav-link>压缩 / 裁剪</a>
             </div>
           </nav>
@@ -415,8 +415,8 @@
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="space-y-2">
               <p class="text-xs font-bold uppercase tracking-normal text-indigo-700">Tool 04</p>
-              <h2 id="audio-title" class="text-2xl font-semibold tracking-normal text-slate-950">音频裁剪 / 转 OGG</h2>
-              <p class="max-w-2xl text-sm leading-6 text-slate-600">上传常见音频，查看音量波形并截取需要的片段，再转成适合游戏素材打包的 OGG / Vorbis。</p>
+              <h2 id="audio-title" class="text-2xl font-semibold tracking-normal text-slate-950">音频裁剪 / 保留原格式</h2>
+              <p class="max-w-2xl text-sm leading-6 text-slate-600">上传常见音频，查看音量波形并截取需要的片段；导出时保留原始音频格式。</p>
             </div>
             <span id="audioStatus" class="w-fit rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">待上传</span>
           </div>
@@ -485,7 +485,7 @@
             <aside class="flex flex-col gap-6">
               <div class="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm shadow-slate-900/5">
                 <label class="grid gap-2 text-sm font-medium text-slate-600">
-                  <span>压缩预设</span>
+                  <span>导出质量（有损格式）</span>
                   <select id="audioQualityInput" class="min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-950 shadow-sm outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100">
                     <option value="small" selected>更小体积</option>
                     <option value="balanced">均衡</option>
@@ -520,8 +520,8 @@
               </div>
 
               <div class="grid gap-3">
-                <button id="convertAudioButton" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-200 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled>转换为 OGG</button>
-                <a id="downloadAudio" class="inline-flex min-h-11 cursor-not-allowed items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-400 shadow-sm transition-all duration-200" aria-disabled="true">下载 OGG</a>
+                <button id="convertAudioButton" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-200 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled>裁剪并导出原格式</button>
+                <a id="downloadAudio" class="inline-flex min-h-11 cursor-not-allowed items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-400 shadow-sm transition-all duration-200" aria-disabled="true">下载裁剪音频</a>
               </div>
 
               <p id="audioFeedback" class="min-h-6 text-sm leading-6 text-slate-500" role="status" aria-live="polite"></p>

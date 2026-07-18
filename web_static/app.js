@@ -2034,7 +2034,7 @@ async function convertAudio() {
   convertAudioButton.textContent = "转换中...";
   audioStatus.textContent = "转换中";
   resetAudioResult();
-  setFeedback(audioFeedback, `正在裁剪 ${formatAudioTime(audioState.start)} - ${formatAudioTime(audioState.end)} 并转成 OGG / Vorbis。`);
+  setFeedback(audioFeedback, `正在裁剪 ${formatAudioTime(audioState.start)} - ${formatAudioTime(audioState.end)}，并保留原始音频格式。`);
 
   try {
     const response = await fetch("/api/convert-audio", {
@@ -2056,23 +2056,26 @@ async function convertAudio() {
     const blob = await response.blob();
     revokeUrl("resultUrl", audioState);
     audioState.resultUrl = URL.createObjectURL(blob);
-    const filename = `${audioState.file.name.replace(/\.[^.]+$/, "") || "audio"}.ogg`;
+    const match = audioState.file.name.match(/(\.[^.]+)$/);
+    const suffix = match ? match[1].toLowerCase() : ".audio";
+    const filename = `${audioState.file.name.replace(/\.[^.]+$/, "") || "audio"}-trimmed${suffix}`;
     enableDownloadLink(downloadAudio, audioState.resultUrl, filename);
 
     const sourceBytes = Number(response.headers.get("X-Source-Bytes") || audioState.file.size);
     const outputBytes = Number(response.headers.get("X-Output-Bytes") || blob.size);
     const saved = sourceBytes > 0 ? Math.max(0, 100 - (outputBytes / sourceBytes) * 100) : 0;
-    const codec = response.headers.get("X-Audio-Codec") || "vorbis";
+    const codec = response.headers.get("X-Audio-Codec") || "-";
+    const format = response.headers.get("X-Audio-Format") || suffix.replace(/^\./, "").toUpperCase();
     audioOutputMetrics.textContent = formatBytes(outputBytes);
-    audioCodecValue.textContent = codec;
+    audioCodecValue.textContent = `${format} / ${codec}`;
     audioStatus.textContent = "完成";
-    setFeedback(audioFeedback, `完成，已保留 ${formatAudioTime(audioState.end - audioState.start)}，体积减少 ${saved.toFixed(1)}%。`, "success");
+    setFeedback(audioFeedback, `完成，已保留 ${formatAudioTime(audioState.end - audioState.start)}，已导出 ${format} 格式，体积减少 ${saved.toFixed(1)}%。`, "success");
   } catch (error) {
     audioStatus.textContent = "失败";
     setFeedback(audioFeedback, error.message, "error");
   } finally {
     convertAudioButton.disabled = !audioState.file;
-    convertAudioButton.textContent = "转换为 OGG";
+    convertAudioButton.textContent = "裁剪并导出原格式";
   }
 }
 
@@ -2191,7 +2194,7 @@ frameSlider.addEventListener("input", () => {
 audioQualityInput.addEventListener("change", () => {
   resetAudioResult();
   if (audioState.file) {
-    setFeedback(audioFeedback, `当前保留 ${formatAudioTime(audioState.end - audioState.start)}，可转换为 OGG。`);
+    setFeedback(audioFeedback, `当前保留 ${formatAudioTime(audioState.end - audioState.start)}，可导出为原始格式。`);
   }
 });
 
