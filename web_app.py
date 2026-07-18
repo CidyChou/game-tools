@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from argparse import ArgumentTypeError
+from array import array
 from collections.abc import Sequence
 from io import BytesIO
+import math
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
@@ -26,7 +29,7 @@ from remove_bg import (
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "web_static"
 FILENAME_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
-MP3_EXTENSION = ".mp3"
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".oga", ".opus"}
 VORBIS_QUALITY_PRESETS = {
     "small": "3",
     "balanced": "4",
@@ -177,10 +180,29 @@ def _validate_image_suffix(filename: str | None) -> None:
 
 def validate_audio_upload(filename: str | None, raw: bytes) -> None:
     suffix = Path(filename or "").suffix.lower()
-    if suffix != MP3_EXTENSION:
-        raise ValueError("unsupported audio format; only MP3 is supported")
+    if suffix not in AUDIO_EXTENSIONS:
+        supported = ", ".join(sorted(extension.removeprefix(".").upper() for extension in AUDIO_EXTENSIONS))
+        raise ValueError(f"unsupported audio format; supported formats: {supported}")
     if not raw:
         raise ValueError("empty audio upload")
+
+
+def _validate_audio_input_suffix(input_suffix: str) -> str:
+    suffix = input_suffix.lower()
+    if not suffix.startswith("."):
+        suffix = f".{suffix}"
+    if suffix not in AUDIO_EXTENSIONS:
+        raise ValueError("unsupported audio format")
+    return suffix
+
+
+def _validate_audio_trim(start_time: float, end_time: float | None) -> tuple[float, float | None]:
+    if not math.isfinite(start_time) or start_time < 0:
+        raise ValueError("audio start time must be greater than or equal to 0")
+    if end_time is not None:
+        if not math.isfinite(end_time) or end_time <= start_time:
+            raise ValueError("audio end time must be greater than start time")
+    return start_time, end_time
 
 
 def _audio_output_name(filename: str | None) -> str:
@@ -220,20 +242,35 @@ def _select_vorbis_encoder(ffmpeg: str) -> tuple[str, list[str]]:
     raise ValueError("ffmpeg does not provide a Vorbis audio encoder")
 
 
-def convert_mp3_to_ogg_bytes(raw: bytes, *, quality: str) -> tuple[bytes, dict[str, str]]:
+def convert_audio_to_ogg_bytes(
+    raw: bytes,
+    *,
+    input_suffix: str,
+    quality: str,
+    start_time: float = 0,
+    end_time: float | None = None,
+) -> tuple[bytes, dict[str, str]]:
     if quality not in VORBIS_QUALITY_PRESETS:
         raise ValueError("quality must be small, balanced, or clear")
     if not raw:
         raise ValueError("empty audio upload")
+    suffix = _validate_audio_input_suffix(input_suffix)
+    start_time, end_time = _validate_audio_trim(start_time, end_time)
 
     ffmpeg = _require_executable("ffmpeg")
     encoder, encoder_flags = _select_vorbis_encoder(ffmpeg)
 
     with tempfile.TemporaryDirectory() as tmp:
         temp_dir = Path(tmp)
-        input_file = temp_dir / "input.mp3"
+        input_file = temp_dir / f"input{suffix}"
         output_file = temp_dir / "output.ogg"
         input_file.write_bytes(raw)
+
+        trim_flags = []
+        if start_time > 0:
+            trim_flags.extend(["-ss", f"{start_time:.6f}"])
+        if end_time is not None:
+            trim_flags.extend(["-t", f"{end_time - start_time:.6f}"])
 
         command = [
             ffmpeg,
@@ -243,7 +280,10 @@ def convert_mp3_to_ogg_bytes(raw: bytes, *, quality: str) -> tuple[bytes, dict[s
             "-y",
             "-i",
             str(input_file),
+            *trim_flags,
             "-vn",
+            "-map",
+            "0:a:0",
             "-ac",
             "2",
             "-c:a",
@@ -279,6 +319,85 @@ def convert_mp3_to_ogg_bytes(raw: bytes, *, quality: str) -> tuple[bytes, dict[s
         "output_bytes": str(len(converted)),
         "audio_codec": "vorbis",
         "audio_quality": quality,
+        "trim_start": f"{start_time:.3f}",
+        "trim_end": f"{end_time:.3f}" if end_time is not None else "",
+    }
+
+
+def convert_mp3_to_ogg_bytes(raw: bytes, *, quality: str) -> tuple[bytes, dict[str, str]]:
+    return convert_audio_to_ogg_bytes(raw, input_suffix=".mp3", quality=quality)
+
+
+def build_audio_waveform(
+    raw: bytes,
+    *,
+    input_suffix: str,
+    points: int = 800,
+) -> dict[str, float | list[float]]:
+    if not raw:
+        raise ValueError("empty audio upload")
+    if not 64 <= points <= 2000:
+        raise ValueError("waveform points must be between 64 and 2000")
+    suffix = _validate_audio_input_suffix(input_suffix)
+    ffmpeg = _require_executable("ffmpeg")
+    sample_rate = 800
+
+    with tempfile.TemporaryDirectory() as tmp:
+        input_file = Path(tmp) / f"input{suffix}"
+        input_file.write_bytes(raw)
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(input_file),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            "-f",
+            "f32le",
+            "pipe:1",
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                timeout=FFMPEG_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("audio waveform analysis timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or b"").decode(errors="replace").strip()
+            message = f"audio waveform analysis failed: {detail}" if detail else "audio waveform analysis failed"
+            raise ValueError(message) from exc
+
+    samples = array("f")
+    samples.frombytes(completed.stdout[: len(completed.stdout) // 4 * 4])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        raise ValueError("audio waveform analysis produced no samples")
+
+    absolute_samples = [abs(sample) for sample in samples]
+    raw_peaks: list[float] = []
+    for index in range(points):
+        start = math.floor(index * len(absolute_samples) / points)
+        end = math.floor((index + 1) * len(absolute_samples) / points)
+        if end <= start:
+            end = min(len(absolute_samples), start + 1)
+        raw_peaks.append(max(absolute_samples[start:end], default=0.0))
+
+    peak = max(raw_peaks, default=0.0)
+    normalized = [round(min(1.0, value / peak), 4) if peak > 0 else 0.0 for value in raw_peaks]
+    return {
+        "duration": round(len(samples) / sample_rate, 3),
+        "peaks": normalized,
     }
 
 
@@ -492,11 +611,19 @@ async def process_image(
 async def convert_audio(
     audio: UploadFile = File(...),
     quality: str = Form("small"),
+    start_time: float = Form(0),
+    end_time: float | None = Form(None),
 ) -> Response:
     raw = await audio.read()
     try:
         validate_audio_upload(audio.filename, raw)
-        result, metadata = convert_mp3_to_ogg_bytes(raw, quality=quality)
+        result, metadata = convert_audio_to_ogg_bytes(
+            raw,
+            input_suffix=Path(audio.filename or "").suffix,
+            quality=quality,
+            start_time=start_time,
+            end_time=end_time,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -509,5 +636,22 @@ async def convert_audio(
             "X-Output-Bytes": metadata["output_bytes"],
             "X-Audio-Codec": metadata["audio_codec"],
             "X-Audio-Quality": metadata["audio_quality"],
+            "X-Trim-Start": metadata["trim_start"],
+            "X-Trim-End": metadata["trim_end"],
         },
     )
+
+
+@app.post("/api/audio-waveform")
+async def audio_waveform(audio: UploadFile = File(...)) -> JSONResponse:
+    raw = await audio.read()
+    try:
+        validate_audio_upload(audio.filename, raw)
+        waveform = build_audio_waveform(
+            raw,
+            input_suffix=Path(audio.filename or "").suffix,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(waveform)

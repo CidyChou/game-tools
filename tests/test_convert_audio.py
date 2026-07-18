@@ -36,6 +36,28 @@ def build_test_mp3() -> bytes:
         return output.read_bytes()
 
 
+def build_test_wav(duration: float = 2.0) -> bytes:
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / "tone.wav"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=frequency=440:duration={duration}",
+                "-ac",
+                "1",
+                str(output),
+            ],
+            check=True,
+        )
+        return output.read_bytes()
+
+
 def probe_ogg(raw: bytes) -> dict[str, str]:
     with tempfile.TemporaryDirectory() as tmp:
         source = Path(tmp) / "output.ogg"
@@ -66,6 +88,29 @@ def probe_ogg(raw: bytes) -> dict[str, str]:
     return values
 
 
+def probe_duration(raw: bytes, suffix: str) -> float:
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / f"output{suffix}"
+        source.write_bytes(raw)
+        completed = subprocess.run(
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(source),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    return float(completed.stdout.strip())
+
+
 @unittest.skipUnless(
     shutil.which("ffmpeg") and shutil.which("ffprobe"),
     "ffmpeg and ffprobe are required for audio conversion tests",
@@ -93,11 +138,13 @@ class ConvertAudioTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             web_app.convert_mp3_to_ogg_bytes(b"not really mp3", quality="tiny")
 
-    def test_validate_audio_suffix_only_accepts_mp3(self) -> None:
-        web_app.validate_audio_upload("effect.mp3", b"abc")
+    def test_validate_audio_suffix_accepts_common_audio_formats(self) -> None:
+        for suffix in ("mp3", "wav", "flac", "m4a", "aac", "ogg", "opus"):
+            with self.subTest(suffix=suffix):
+                web_app.validate_audio_upload(f"effect.{suffix}", b"abc")
 
         with self.assertRaises(ValueError):
-            web_app.validate_audio_upload("effect.wav", b"abc")
+            web_app.validate_audio_upload("effect.txt", b"abc")
 
         with self.assertRaises(ValueError):
             web_app.validate_audio_upload("effect.mp3", b"")
@@ -108,6 +155,45 @@ class ConvertAudioTests(unittest.TestCase):
                 web_app.convert_mp3_to_ogg_bytes(b"not empty", quality="small")
 
         self.assertIn("ffmpeg", str(context.exception))
+
+    def test_converts_and_trims_wav_to_selected_ogg_segment(self) -> None:
+        source = build_test_wav()
+
+        converted, metadata = web_app.convert_audio_to_ogg_bytes(
+            source,
+            input_suffix=".wav",
+            quality="balanced",
+            start_time=0.4,
+            end_time=1.2,
+        )
+
+        self.assertAlmostEqual(probe_duration(converted, ".ogg"), 0.8, delta=0.08)
+        self.assertEqual(metadata["trim_start"], "0.400")
+        self.assertEqual(metadata["trim_end"], "1.200")
+
+    def test_rejects_invalid_audio_trim_range(self) -> None:
+        source = build_test_wav()
+
+        for start_time, end_time in ((-0.1, 1.0), (1.0, 1.0), (1.5, 1.0)):
+            with self.subTest(start_time=start_time, end_time=end_time):
+                with self.assertRaises(ValueError):
+                    web_app.convert_audio_to_ogg_bytes(
+                        source,
+                        input_suffix=".wav",
+                        quality="small",
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+
+    def test_builds_normalized_waveform_for_audio_editor(self) -> None:
+        source = build_test_wav()
+
+        waveform = web_app.build_audio_waveform(source, input_suffix=".wav", points=120)
+
+        self.assertAlmostEqual(waveform["duration"], 2.0, delta=0.05)
+        self.assertEqual(len(waveform["peaks"]), 120)
+        self.assertGreater(max(waveform["peaks"]), 0.9)
+        self.assertTrue(all(0 <= peak <= 1 for peak in waveform["peaks"]))
 
 
 if __name__ == "__main__":

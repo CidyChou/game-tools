@@ -32,6 +32,13 @@ const audioState = {
   file: null,
   sourceUrl: "",
   resultUrl: "",
+  duration: 0,
+  start: 0,
+  end: 0,
+  peaks: [],
+  dragTarget: "",
+  playingSelection: false,
+  loadToken: 0,
 };
 
 const processState = {
@@ -113,8 +120,25 @@ const audioDropZone = $("audioDropZone");
 const audioPreview = $("audioPreview");
 const audioPreviewName = $("audioPreviewName");
 const audioStatus = $("audioStatus");
+const audioEditor = $("audioEditor");
+const audioTimeline = $("audioTimeline");
+const audioWaveformCanvas = $("audioWaveformCanvas");
+const audioWaveformContext = audioWaveformCanvas.getContext("2d");
+const audioSelection = $("audioSelection");
+const audioStartHandle = $("audioStartHandle");
+const audioEndHandle = $("audioEndHandle");
+const audioPlayhead = $("audioPlayhead");
+const audioRangeOutput = $("audioRangeOutput");
+const audioTimelineMiddle = $("audioTimelineMiddle");
+const audioTimelineEnd = $("audioTimelineEnd");
+const audioStartInput = $("audioStartInput");
+const audioEndInput = $("audioEndInput");
+const playAudioSelectionButton = $("playAudioSelectionButton");
+const resetAudioSelectionButton = $("resetAudioSelectionButton");
 const audioQualityInput = $("audioQualityInput");
 const audioSourceMetrics = $("audioSourceMetrics");
+const audioDurationValue = $("audioDurationValue");
+const audioSelectionDurationValue = $("audioSelectionDurationValue");
 const audioOutputMetrics = $("audioOutputMetrics");
 const audioCodecValue = $("audioCodecValue");
 const convertAudioButton = $("convertAudioButton");
@@ -1745,21 +1769,235 @@ function resetAudioResult() {
   audioCodecValue.textContent = "-";
 }
 
-function handleAudioFiles(files) {
+function formatAudioTime(value, includeMilliseconds = true) {
+  const safeValue = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(safeValue / 60);
+  const seconds = Math.floor(safeValue % 60);
+  if (!includeMilliseconds) {
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  const milliseconds = Math.floor((safeValue % 1) * 1000);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+function drawAudioWaveform() {
+  const bounds = audioWaveformCanvas.getBoundingClientRect();
+  if (!bounds.width) return;
+
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(bounds.width * pixelRatio));
+  const height = Math.max(1, Math.round(bounds.height * pixelRatio));
+  if (audioWaveformCanvas.width !== width || audioWaveformCanvas.height !== height) {
+    audioWaveformCanvas.width = width;
+    audioWaveformCanvas.height = height;
+  }
+
+  audioWaveformContext.clearRect(0, 0, width, height);
+  audioWaveformContext.fillStyle = "#0f172a";
+  audioWaveformContext.fillRect(0, 0, width, height);
+  audioWaveformContext.strokeStyle = "#334155";
+  audioWaveformContext.lineWidth = pixelRatio;
+  audioWaveformContext.beginPath();
+  audioWaveformContext.moveTo(0, height / 2);
+  audioWaveformContext.lineTo(width, height / 2);
+  audioWaveformContext.stroke();
+
+  if (!audioState.peaks.length) {
+    audioWaveformContext.fillStyle = "#94a3b8";
+    audioWaveformContext.font = `${14 * pixelRatio}px ui-sans-serif, system-ui, sans-serif`;
+    audioWaveformContext.textAlign = "center";
+    audioWaveformContext.fillText("正在生成音量波形…", width / 2, height / 2 + 5 * pixelRatio);
+    return;
+  }
+
+  const barWidth = width / audioState.peaks.length;
+  audioWaveformContext.fillStyle = "#818cf8";
+  audioState.peaks.forEach((peak, index) => {
+    const amplitude = Math.max(1.5 * pixelRatio, peak * height * 0.43);
+    const x = index * barWidth;
+    audioWaveformContext.fillRect(x, height / 2 - amplitude, Math.max(1, barWidth * 0.72), amplitude * 2);
+  });
+}
+
+function updateAudioPlayhead() {
+  if (!audioState.duration || !audioState.playingSelection) {
+    audioPlayhead.classList.add("hidden");
+    return;
+  }
+  const percent = Math.max(0, Math.min(100, (audioPreview.currentTime / audioState.duration) * 100));
+  audioPlayhead.style.left = `${percent}%`;
+  audioPlayhead.classList.remove("hidden");
+}
+
+function updateAudioSelectionUi() {
+  const duration = audioState.duration;
+  const startPercent = duration ? (audioState.start / duration) * 100 : 0;
+  const endPercent = duration ? (audioState.end / duration) * 100 : 0;
+  audioSelection.style.left = `${startPercent}%`;
+  audioSelection.style.width = `${Math.max(0, endPercent - startPercent)}%`;
+  audioStartHandle.style.left = `${startPercent}%`;
+  audioEndHandle.style.left = `${endPercent}%`;
+  audioStartHandle.setAttribute("aria-valuenow", audioState.start.toFixed(2));
+  audioStartHandle.setAttribute("aria-valuemin", "0");
+  audioStartHandle.setAttribute("aria-valuemax", Math.max(0, audioState.end).toFixed(2));
+  audioEndHandle.setAttribute("aria-valuenow", audioState.end.toFixed(2));
+  audioEndHandle.setAttribute("aria-valuemin", Math.max(0, audioState.start).toFixed(2));
+  audioEndHandle.setAttribute("aria-valuemax", duration.toFixed(2));
+  audioStartInput.value = audioState.start.toFixed(2);
+  audioEndInput.value = audioState.end.toFixed(2);
+  audioStartInput.max = Math.max(0, audioState.end).toFixed(2);
+  audioEndInput.max = duration.toFixed(2);
+  audioRangeOutput.textContent = `${formatAudioTime(audioState.start)} - ${formatAudioTime(audioState.end)}`;
+  audioDurationValue.textContent = formatAudioTime(duration);
+  audioSelectionDurationValue.textContent = formatAudioTime(audioState.end - audioState.start);
+  audioTimelineMiddle.textContent = formatAudioTime(duration / 2, false);
+  audioTimelineEnd.textContent = formatAudioTime(duration, false);
+  updateAudioPlayhead();
+}
+
+function setAudioSelection(start, end, changedEdge = "") {
+  const duration = audioState.duration;
+  if (!duration) return;
+  const minGap = Math.min(0.05, duration / 10);
+  let nextStart = Math.max(0, Math.min(duration, Number(start) || 0));
+  let nextEnd = Math.max(0, Math.min(duration, Number(end) || 0));
+
+  if (nextEnd - nextStart < minGap) {
+    if (changedEdge === "start") {
+      nextStart = Math.max(0, nextEnd - minGap);
+    } else {
+      nextEnd = Math.min(duration, nextStart + minGap);
+    }
+  }
+
+  audioState.start = Math.round(nextStart * 1000) / 1000;
+  audioState.end = Math.round(nextEnd * 1000) / 1000;
+  audioState.playingSelection = false;
+  audioPreview.pause();
+  playAudioSelectionButton.textContent = "播放选区";
+  resetAudioResult();
+  updateAudioSelectionUi();
+}
+
+function audioTimeFromPointer(event) {
+  const bounds = audioTimeline.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
+  return ratio * audioState.duration;
+}
+
+function updateAudioHandleFromPointer(event, edge) {
+  const time = audioTimeFromPointer(event);
+  if (edge === "start") {
+    setAudioSelection(time, audioState.end, "start");
+  } else {
+    setAudioSelection(audioState.start, time, "end");
+  }
+}
+
+function startAudioHandleDrag(event, edge) {
+  if (!audioState.duration) return;
+  event.preventDefault();
+  event.stopPropagation();
+  audioState.dragTarget = edge;
+  event.currentTarget.setPointerCapture(event.pointerId);
+  updateAudioHandleFromPointer(event, edge);
+}
+
+function moveAudioHandle(event) {
+  if (!audioState.dragTarget) return;
+  event.preventDefault();
+  updateAudioHandleFromPointer(event, audioState.dragTarget);
+}
+
+function stopAudioHandleDrag(event) {
+  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+  audioState.dragTarget = "";
+}
+
+function adjustAudioHandleFromKeyboard(event, edge) {
+  if (!audioState.duration) return;
+  const step = event.shiftKey ? 1 : 0.05;
+  let target = edge === "start" ? audioState.start : audioState.end;
+  if (event.key === "ArrowLeft" || event.key === "ArrowDown") target -= step;
+  else if (event.key === "ArrowRight" || event.key === "ArrowUp") target += step;
+  else if (event.key === "Home") target = 0;
+  else if (event.key === "End") target = audioState.duration;
+  else return;
+  event.preventDefault();
+  if (edge === "start") setAudioSelection(target, audioState.end, "start");
+  else setAudioSelection(audioState.start, target, "end");
+}
+
+async function loadAudioWaveform(file, loadToken) {
+  const form = new FormData();
+  form.append("audio", file);
+  const response = await fetch("/api/audio-waveform", { method: "POST", body: form });
+  if (!response.ok) {
+    let message = "无法生成音频波形";
+    try {
+      const error = await response.json();
+      message = error.detail || message;
+    } catch {
+      message = await response.text();
+    }
+    throw new Error(message);
+  }
+  const waveform = await response.json();
+  if (loadToken !== audioState.loadToken) return;
+
+  audioState.duration = Number(waveform.duration) || 0;
+  audioState.peaks = Array.isArray(waveform.peaks) ? waveform.peaks : [];
+  if (!audioState.duration || !audioState.peaks.length) {
+    throw new Error("音频波形数据为空。");
+  }
+  audioState.start = 0;
+  audioState.end = audioState.duration;
+  audioStartInput.disabled = false;
+  audioEndInput.disabled = false;
+  audioStartHandle.disabled = false;
+  audioEndHandle.disabled = false;
+  playAudioSelectionButton.disabled = false;
+  resetAudioSelectionButton.disabled = false;
+  convertAudioButton.disabled = false;
+  drawAudioWaveform();
+  updateAudioSelectionUi();
+  audioStatus.textContent = "可裁剪";
+  setFeedback(audioFeedback, `波形已生成，拖动把手选择片段；当前保留 ${formatAudioTime(audioState.duration)}。`);
+}
+
+async function handleAudioFiles(files) {
   const file = files?.[0];
   if (!file) return;
 
+  const supportedExtensions = [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".oga", ".opus"];
+  const lowerName = file.name.toLowerCase();
   revokeUrl("sourceUrl", audioState);
   resetAudioResult();
+  audioState.loadToken += 1;
+  const loadToken = audioState.loadToken;
   audioState.file = null;
+  audioState.duration = 0;
+  audioState.start = 0;
+  audioState.end = 0;
+  audioState.peaks = [];
+  audioState.playingSelection = false;
+  audioPreview.pause();
   audioPreview.removeAttribute("src");
   audioPreviewName.textContent = "未选择";
   audioSourceMetrics.textContent = "-";
+  audioDurationValue.textContent = "-";
+  audioSelectionDurationValue.textContent = "-";
+  audioEditor.classList.add("hidden");
+  [audioStartInput, audioEndInput, audioStartHandle, audioEndHandle, playAudioSelectionButton, resetAudioSelectionButton].forEach((control) => {
+    control.disabled = true;
+  });
 
-  if (!file.name.toLowerCase().endsWith(".mp3")) {
+  if (!supportedExtensions.some((extension) => lowerName.endsWith(extension))) {
     audioStatus.textContent = "失败";
     convertAudioButton.disabled = true;
-    setFeedback(audioFeedback, "请选择 MP3 文件。", "error");
+    setFeedback(audioFeedback, "请选择 MP3、WAV、FLAC、M4A、AAC、OGG 或 OPUS 文件。", "error");
     return;
   }
 
@@ -1768,9 +2006,19 @@ function handleAudioFiles(files) {
   audioPreview.src = audioState.sourceUrl;
   audioPreviewName.textContent = file.name;
   audioSourceMetrics.textContent = formatBytes(file.size);
-  audioStatus.textContent = "已选择";
-  convertAudioButton.disabled = false;
-  setFeedback(audioFeedback, `${file.name}，${formatBytes(file.size)}`);
+  audioEditor.classList.remove("hidden");
+  audioStatus.textContent = "分析中";
+  convertAudioButton.disabled = true;
+  drawAudioWaveform();
+  setFeedback(audioFeedback, `正在分析 ${file.name} 的音量波形…`);
+
+  try {
+    await loadAudioWaveform(file, loadToken);
+  } catch (error) {
+    if (loadToken !== audioState.loadToken) return;
+    audioStatus.textContent = "分析失败";
+    setFeedback(audioFeedback, `${error.message} 请确认文件未损坏。`, "error");
+  }
 }
 
 async function convertAudio() {
@@ -1779,12 +2027,14 @@ async function convertAudio() {
   const form = new FormData();
   form.append("audio", audioState.file);
   form.append("quality", audioQualityInput.value);
+  form.append("start_time", audioState.start.toFixed(3));
+  form.append("end_time", audioState.end.toFixed(3));
 
   convertAudioButton.disabled = true;
   convertAudioButton.textContent = "转换中...";
   audioStatus.textContent = "转换中";
   resetAudioResult();
-  setFeedback(audioFeedback, "正在转成 OGG / Vorbis。");
+  setFeedback(audioFeedback, `正在裁剪 ${formatAudioTime(audioState.start)} - ${formatAudioTime(audioState.end)} 并转成 OGG / Vorbis。`);
 
   try {
     const response = await fetch("/api/convert-audio", {
@@ -1816,7 +2066,7 @@ async function convertAudio() {
     audioOutputMetrics.textContent = formatBytes(outputBytes);
     audioCodecValue.textContent = codec;
     audioStatus.textContent = "完成";
-    setFeedback(audioFeedback, `完成，体积减少 ${saved.toFixed(1)}%。`, "success");
+    setFeedback(audioFeedback, `完成，已保留 ${formatAudioTime(audioState.end - audioState.start)}，体积减少 ${saved.toFixed(1)}%。`, "success");
   } catch (error) {
     audioStatus.textContent = "失败";
     setFeedback(audioFeedback, error.message, "error");
@@ -1841,6 +2091,56 @@ prevFrameButton.addEventListener("click", () => stepFrame(-1));
 nextFrameButton.addEventListener("click", () => stepFrame(1));
 generateVideoFramesButton.addEventListener("click", generateVideoFrames);
 convertAudioButton.addEventListener("click", convertAudio);
+playAudioSelectionButton.addEventListener("click", async () => {
+  if (!audioState.duration) return;
+  if (audioState.playingSelection && !audioPreview.paused) {
+    audioState.playingSelection = false;
+    audioPreview.pause();
+    playAudioSelectionButton.textContent = "播放选区";
+    updateAudioPlayhead();
+    return;
+  }
+
+  audioPreview.currentTime = audioState.start;
+  audioState.playingSelection = true;
+  playAudioSelectionButton.textContent = "暂停选区";
+  try {
+    await audioPreview.play();
+  } catch {
+    audioState.playingSelection = false;
+    playAudioSelectionButton.textContent = "播放选区";
+    updateAudioPlayhead();
+    setFeedback(audioFeedback, "浏览器无法播放这个格式，但仍可按波形裁剪并转换。", "error");
+  }
+});
+resetAudioSelectionButton.addEventListener("click", () => {
+  setAudioSelection(0, audioState.duration);
+  setFeedback(audioFeedback, `已重置为完整音频 ${formatAudioTime(audioState.duration)}。`);
+});
+[audioStartHandle, audioEndHandle].forEach((handle) => {
+  const edge = handle === audioStartHandle ? "start" : "end";
+  handle.addEventListener("pointerdown", (event) => startAudioHandleDrag(event, edge));
+  handle.addEventListener("pointermove", moveAudioHandle);
+  handle.addEventListener("pointerup", stopAudioHandleDrag);
+  handle.addEventListener("pointercancel", stopAudioHandleDrag);
+  handle.addEventListener("keydown", (event) => adjustAudioHandleFromKeyboard(event, edge));
+});
+audioTimeline.addEventListener("pointerdown", (event) => {
+  if (!audioState.duration || event.target.closest(".audio-trim-handle")) return;
+  const time = audioTimeFromPointer(event);
+  const edge = Math.abs(time - audioState.start) <= Math.abs(time - audioState.end) ? "start" : "end";
+  if (edge === "start") setAudioSelection(time, audioState.end, "start");
+  else setAudioSelection(audioState.start, time, "end");
+});
+[audioStartInput, audioEndInput].forEach((input) => {
+  input.addEventListener("change", () => {
+    if (input === audioStartInput) {
+      setAudioSelection(Number(input.value), audioState.end, "start");
+    } else {
+      setAudioSelection(audioState.start, Number(input.value), "end");
+    }
+  });
+});
 setBaseFrameButton.addEventListener("click", () => {
   baseFrameInput.value = String(spriteState.currentFrame + 1);
   invalidateAlignment();
@@ -1856,8 +2156,24 @@ videoPreview.addEventListener("error", () => {
 });
 audioPreview.addEventListener("error", () => {
   if (!audioState.file) return;
-  audioStatus.textContent = "预览失败";
-  setFeedback(audioFeedback, "浏览器无法预览这个 MP3，但仍可尝试转换。", "error");
+  playAudioSelectionButton.disabled = true;
+  setFeedback(audioFeedback, "浏览器无法播放这个格式，但仍可按波形裁剪并转换。", "error");
+});
+audioPreview.addEventListener("timeupdate", () => {
+  if (!audioState.playingSelection) return;
+  if (audioPreview.currentTime >= audioState.end) {
+    audioState.playingSelection = false;
+    audioPreview.pause();
+    audioPreview.currentTime = audioState.start;
+    playAudioSelectionButton.textContent = "播放选区";
+  }
+  updateAudioPlayhead();
+});
+audioPreview.addEventListener("pause", () => {
+  if (!audioState.playingSelection) {
+    playAudioSelectionButton.textContent = "播放选区";
+    updateAudioPlayhead();
+  }
 });
 frameSlider.addEventListener("input", () => {
   spriteState.currentFrame = Number(frameSlider.value);
@@ -1875,7 +2191,7 @@ frameSlider.addEventListener("input", () => {
 audioQualityInput.addEventListener("change", () => {
   resetAudioResult();
   if (audioState.file) {
-    setFeedback(audioFeedback, `${audioState.file.name}，${formatBytes(audioState.file.size)}`);
+    setFeedback(audioFeedback, `当前保留 ${formatAudioTime(audioState.end - audioState.start)}，可转换为 OGG。`);
   }
 });
 
@@ -1950,7 +2266,10 @@ processCropCanvas.addEventListener("pointermove", (event) => {
     processState.cropDrag = null;
   });
 });
-window.addEventListener("resize", drawProcessCropOverlay);
+window.addEventListener("resize", () => {
+  drawProcessCropOverlay();
+  drawAudioWaveform();
+});
 
 [
   "columnsInput",

@@ -32,6 +32,14 @@
         color: rgb(67 56 202);
       }
 
+      .audio-trim-handle {
+        touch-action: none;
+      }
+
+      #audioWaveformCanvas {
+        height: 12rem;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         html {
           scroll-behavior: auto;
@@ -407,8 +415,8 @@
           <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="space-y-2">
               <p class="text-xs font-bold uppercase tracking-normal text-indigo-700">Tool 04</p>
-              <h2 id="audio-title" class="text-2xl font-semibold tracking-normal text-slate-950">MP3 转 OGG</h2>
-              <p class="max-w-2xl text-sm leading-6 text-slate-600">上传单个 MP3，转成更适合游戏素材打包的 OGG / Vorbis，并按预设压缩体积。</p>
+              <h2 id="audio-title" class="text-2xl font-semibold tracking-normal text-slate-950">音频裁剪 / 转 OGG</h2>
+              <p class="max-w-2xl text-sm leading-6 text-slate-600">上传常见音频，查看音量波形并截取需要的片段，再转成适合游戏素材打包的 OGG / Vorbis。</p>
             </div>
             <span id="audioStatus" class="w-fit rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">待上传</span>
           </div>
@@ -416,9 +424,9 @@
           <div class="mt-6 grid gap-8 xl:grid-cols-[minmax(0,1fr)_24rem]">
             <div class="flex flex-col gap-6">
               <label id="audioDropZone" for="audioInput" class="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 p-6 text-center shadow-inner shadow-slate-900/5 transition-all duration-200 hover:border-indigo-400 hover:bg-white/80 focus-within:outline focus-within:outline-4 focus-within:outline-indigo-200">
-                <input id="audioInput" class="sr-only" type="file" accept=".mp3,audio/mpeg">
-                <span class="text-base font-semibold text-slate-950">上传 MP3</span>
-                <span class="mt-2 text-sm text-slate-500">单文件转换，输出 OGG / Vorbis</span>
+                <input id="audioInput" class="sr-only" type="file" accept=".mp3,.wav,.flac,.m4a,.aac,.ogg,.oga,.opus,audio/*">
+                <span class="text-base font-semibold text-slate-950">点击或拖拽音频</span>
+                <span class="mt-2 text-sm text-slate-500">支持 MP3、WAV、FLAC、M4A、AAC、OGG、OPUS</span>
               </label>
 
               <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-inner shadow-slate-900/5">
@@ -427,6 +435,50 @@
                   <output id="audioPreviewName" class="text-sm font-medium text-slate-500">未选择</output>
                 </div>
                 <audio id="audioPreview" class="w-full" controls preload="metadata"></audio>
+              </div>
+
+              <div id="audioEditor" class="hidden rounded-lg border border-slate-200 bg-slate-950 p-4 shadow-lg shadow-slate-900/10 sm:p-5">
+                <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 class="text-sm font-bold text-white">波形剪辑器</h3>
+                    <p class="mt-1 text-xs leading-5 text-slate-400">拖动两侧把手选择要保留的音频片段</p>
+                  </div>
+                  <output id="audioRangeOutput" class="font-mono text-sm font-bold tabular-nums text-indigo-300">00:00.000 - 00:00.000</output>
+                </div>
+
+                <div id="audioTimeline" class="relative overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-inner" aria-label="音频波形裁剪时间轴">
+                  <canvas id="audioWaveformCanvas" class="block w-full" width="960" height="192" aria-label="音频音量波形"></canvas>
+                  <div id="audioSelection" class="pointer-events-none absolute inset-y-0 z-10 border-y-2 border-indigo-400 bg-indigo-500/15" aria-hidden="true"></div>
+                  <div id="audioPlayhead" class="pointer-events-none absolute inset-y-0 z-20 hidden w-0.5 bg-white shadow" aria-hidden="true"></div>
+                  <button id="audioStartHandle" class="audio-trim-handle absolute inset-y-0 z-30 flex w-11 -translate-x-1/2 cursor-ew-resize items-center justify-center text-white outline-none focus:ring-4 focus:ring-inset focus:ring-indigo-300" type="button" role="slider" aria-label="音频开始位置" aria-orientation="horizontal" disabled>
+                    <span class="flex h-full w-2 items-center justify-center rounded-r bg-indigo-500 shadow"><span class="h-8 w-0.5 rounded bg-white/90"></span></span>
+                  </button>
+                  <button id="audioEndHandle" class="audio-trim-handle absolute inset-y-0 z-30 flex w-11 -translate-x-1/2 cursor-ew-resize items-center justify-center text-white outline-none focus:ring-4 focus:ring-inset focus:ring-indigo-300" type="button" role="slider" aria-label="音频结束位置" aria-orientation="horizontal" disabled>
+                    <span class="flex h-full w-2 items-center justify-center rounded-l bg-indigo-500 shadow"><span class="h-8 w-0.5 rounded bg-white/90"></span></span>
+                  </button>
+                </div>
+
+                <div class="mt-2 flex justify-between font-mono text-xs tabular-nums text-slate-400" aria-hidden="true">
+                  <span>00:00</span>
+                  <span id="audioTimelineMiddle">00:00</span>
+                  <span id="audioTimelineEnd">00:00</span>
+                </div>
+
+                <div class="mt-5 grid gap-4 sm:grid-cols-2">
+                  <label class="grid gap-2 text-sm font-medium text-slate-300">
+                    <span>开始时间（秒）</span>
+                    <input id="audioStartInput" class="min-h-11 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 font-mono tabular-nums text-white outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-500/30 disabled:opacity-50" type="number" min="0" step="0.01" value="0" disabled>
+                  </label>
+                  <label class="grid gap-2 text-sm font-medium text-slate-300">
+                    <span>结束时间（秒）</span>
+                    <input id="audioEndInput" class="min-h-11 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 font-mono tabular-nums text-white outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-500/30 disabled:opacity-50" type="number" min="0" step="0.01" value="0" disabled>
+                  </label>
+                </div>
+
+                <div class="mt-4 flex flex-col gap-3 sm:flex-row">
+                  <button id="playAudioSelectionButton" class="inline-flex min-h-11 flex-1 items-center justify-center rounded-lg bg-white px-4 py-2 text-sm font-bold text-slate-950 shadow-sm transition-colors duration-200 hover:bg-indigo-50 focus:outline focus:outline-4 focus:outline-indigo-400 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled>播放选区</button>
+                  <button id="resetAudioSelectionButton" class="inline-flex min-h-11 flex-1 items-center justify-center rounded-lg border border-slate-600 bg-slate-900 px-4 py-2 text-sm font-bold text-slate-200 transition-colors duration-200 hover:border-slate-400 hover:bg-slate-800 focus:outline focus:outline-4 focus:outline-indigo-400 disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled>重置为全长</button>
+                </div>
               </div>
             </div>
 
@@ -447,6 +499,14 @@
                   <div class="flex items-center justify-between gap-4">
                     <dt class="text-slate-500">原始体积</dt>
                     <dd id="audioSourceMetrics" class="font-bold text-slate-800">-</dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <dt class="text-slate-500">音频时长</dt>
+                    <dd id="audioDurationValue" class="font-bold text-slate-800">-</dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4">
+                    <dt class="text-slate-500">保留片段</dt>
+                    <dd id="audioSelectionDurationValue" class="font-bold text-slate-800">-</dd>
                   </div>
                   <div class="flex items-center justify-between gap-4">
                     <dt class="text-slate-500">输出体积</dt>
@@ -605,6 +665,6 @@
       </main>
     </div>
 
-    <script src="/static/app.js?v=20260622-audio-tool" defer></script>
+    <script src="/static/app.js?v=20260716-audio-editor" defer></script>
   </body>
 </html>

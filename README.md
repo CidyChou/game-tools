@@ -31,7 +31,7 @@ http://192.168.113.225:8000/
 .venv/bin/python -m uvicorn web_app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-网页支持上传图片一键去背景、裁剪 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet，以及上传 MP3 转成压缩后的 OGG / Vorbis 音频。
+网页支持上传图片一键去背景、裁剪 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet。音频工具支持 MP3、WAV、FLAC、M4A、AAC、OGG、OPUS，上传后可查看音量波形、裁剪片段，再转成压缩后的 OGG / Vorbis 音频。
 
 处理默认目录：
 
@@ -126,13 +126,15 @@ curl -X POST http://127.0.0.1:8000/api/process-image \
   --output output/example-processed.png
 ```
 
-MP3 转 OGG / Vorbis 接口：
+音频裁剪并转 OGG / Vorbis 接口：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/convert-audio \
-  -F "audio=@input/example.mp3" \
+  -F "audio=@input/example.wav" \
   -F "quality=small" \
+  -F "start_time=1.5" \
+  -F "end_time=4.8" \
   --output output/example.ogg
 ```
 
-`quality` 支持 `small`（默认，更小体积）、`balanced`、`clear` 三档。
+`quality` 支持 `small`（默认，更小体积）、`balanced`、`clear` 三档。`start_time` 默认为 `0`，不传 `end_time` 时会转换到音频末尾。
