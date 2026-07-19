@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 import unittest
 
 from PIL import Image
 
 from web_app import process_image_bytes
+
+
+BASE_DIR = Path(__file__).resolve().parents[1]
 
 
 def png_bytes(image: Image.Image) -> bytes:
@@ -15,6 +19,15 @@ def png_bytes(image: Image.Image) -> bytes:
 
 
 class ProcessImageTests(unittest.TestCase):
+    def test_expand_controls_are_exposed_and_submitted(self) -> None:
+        html = (BASE_DIR / "web_static" / "index.html").read_text()
+        script = (BASE_DIR / "web_static" / "app.js").read_text()
+
+        self.assertIn('id="processExpandInput"', html)
+        self.assertIn("扩图（透明画布）", html)
+        self.assertIn('form.append("expand_enabled"', script)
+        self.assertIn("drawTransparencyGrid", script)
+
     def test_resizes_uploaded_png_to_target_dimensions(self) -> None:
         image = Image.new("RGBA", (12, 8), (40, 120, 220, 255))
 
@@ -92,6 +105,52 @@ class ProcessImageTests(unittest.TestCase):
                 pixel = pixels[x, y]
                 self.assertGreater(pixel[0], 240)
                 self.assertLess(pixel[2], 15)
+
+    def test_expands_crop_box_with_transparent_pixels_outside_source(self) -> None:
+        image = Image.new("RGBA", (2, 2), (20, 80, 160, 255))
+
+        result, metadata = process_image_bytes(
+            png_bytes(image),
+            crop_enabled=True,
+            expand_enabled=True,
+            crop_x=-1,
+            crop_y=-2,
+            crop_width=4,
+            crop_height=5,
+            resize_enabled=False,
+            target_width=0,
+            target_height=0,
+            keep_aspect_ratio=True,
+            png_mode="palette",
+        )
+
+        output = Image.open(BytesIO(result)).convert("RGBA")
+        self.assertEqual(output.size, (4, 5))
+        self.assertEqual(output.getpixel((0, 0)), (0, 0, 0, 0))
+        self.assertEqual(output.getpixel((1, 2)), (20, 80, 160, 255))
+        self.assertEqual(output.getpixel((2, 3)), (20, 80, 160, 255))
+        self.assertEqual(metadata["crop_x"], "-1")
+        self.assertEqual(metadata["crop_y"], "-2")
+        self.assertEqual(metadata["expanded"], "1")
+
+    def test_expansion_requires_crop_box_to_overlap_source(self) -> None:
+        image = Image.new("RGBA", (5, 5), (0, 0, 0, 255))
+
+        with self.assertRaises(ValueError):
+            process_image_bytes(
+                png_bytes(image),
+                crop_enabled=True,
+                expand_enabled=True,
+                crop_x=6,
+                crop_y=0,
+                crop_width=3,
+                crop_height=3,
+                resize_enabled=False,
+                target_width=0,
+                target_height=0,
+                keep_aspect_ratio=True,
+                png_mode="lossless",
+            )
 
     def test_lossless_png_mode_preserves_dimensions_and_png_format(self) -> None:
         image = Image.new("RGBA", (5, 3), (255, 0, 0, 128))

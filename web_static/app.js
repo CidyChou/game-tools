@@ -47,9 +47,11 @@ const processState = {
   resultUrl: "",
   naturalWidth: 0,
   naturalHeight: 0,
+  sourceImage: null,
   aspectRatio: 1,
   syncingDimensions: false,
   cropRect: { x: 0, y: 0, width: 0, height: 0 },
+  cropViewport: { x: 0, y: 0, width: 1, height: 1 },
   cropDrag: null,
 };
 
@@ -164,6 +166,7 @@ const processCompressInput = $("processCompressInput");
 const processPngModeInput = $("processPngModeInput");
 const processPaletteColorsInput = $("processPaletteColorsInput");
 const processCropInput = $("processCropInput");
+const processExpandInput = $("processExpandInput");
 const processCropXInput = $("processCropXInput");
 const processCropYInput = $("processCropYInput");
 const processCropWidthInput = $("processCropWidthInput");
@@ -175,6 +178,8 @@ const toolSections = navLinks
   .filter(Boolean);
 
 const feedbackClasses = ["text-slate-500", "text-red-600", "text-emerald-700"];
+const maxProcessCanvasDimension = 16384;
+const maxProcessPreviewDimension = 2048;
 const dropActiveClasses = ["border-indigo-400", "bg-white"];
 const linkReadyClasses = ["cursor-pointer", "text-slate-700", "hover:bg-white"];
 const linkDisabledClasses = ["cursor-not-allowed", "text-slate-400"];
@@ -459,10 +464,15 @@ function setDefaultProcessCrop() {
 function clampProcessCropRect(rect) {
   const maxWidth = Math.max(1, processState.naturalWidth);
   const maxHeight = Math.max(1, processState.naturalHeight);
-  const width = clamp(Math.round(rect.width), 1, maxWidth);
-  const height = clamp(Math.round(rect.height), 1, maxHeight);
-  const x = clamp(Math.round(rect.x), 0, maxWidth - width);
-  const y = clamp(Math.round(rect.y), 0, maxHeight - height);
+  const expanded = processExpandInput.checked;
+  const width = clamp(Math.round(rect.width), 1, expanded ? maxProcessCanvasDimension : maxWidth);
+  const height = clamp(Math.round(rect.height), 1, expanded ? maxProcessCanvasDimension : maxHeight);
+  const x = expanded
+    ? clamp(Math.round(rect.x), 1 - width, maxWidth - 1)
+    : clamp(Math.round(rect.x), 0, maxWidth - width);
+  const y = expanded
+    ? clamp(Math.round(rect.y), 1 - height, maxHeight - 1)
+    : clamp(Math.round(rect.y), 0, maxHeight - height);
   return { x, y, width, height };
 }
 
@@ -502,41 +512,98 @@ function syncProcessResizeToCurrentAspect() {
 }
 
 function updateProcessCropControls() {
-  const enabled = processCropInput.checked && processState.naturalWidth > 0 && processState.naturalHeight > 0;
+  const hasImage = processState.naturalWidth > 0 && processState.naturalHeight > 0;
+  const enabled = processCropInput.checked && hasImage;
+  processExpandInput.disabled = !hasImage;
   [processCropXInput, processCropYInput, processCropWidthInput, processCropHeightInput, resetProcessCropButton].forEach(
     (control) => {
       control.disabled = !enabled;
     },
   );
+  processCropXInput.min = processExpandInput.checked ? String(1 - maxProcessCanvasDimension) : "0";
+  processCropYInput.min = processExpandInput.checked ? String(1 - maxProcessCanvasDimension) : "0";
+  processCropWidthInput.max = processExpandInput.checked ? String(maxProcessCanvasDimension) : String(processState.naturalWidth);
+  processCropHeightInput.max = processExpandInput.checked ? String(maxProcessCanvasDimension) : String(processState.naturalHeight);
+  processSourcePreview.classList.toggle("hidden", enabled || !processState.sourceUrl);
+  processSourcePreview.classList.toggle("block", !enabled && Boolean(processState.sourceUrl));
   processCropCanvas.classList.toggle("hidden", !enabled);
+  processCropCanvas.classList.toggle("block", enabled);
   syncProcessResizeToCurrentAspect();
   drawProcessCropOverlay();
 }
 
-function drawProcessCropOverlay() {
-  const enabled = processCropInput.checked && processState.naturalWidth > 0 && processState.naturalHeight > 0;
-  processCropCanvas.width = Math.max(1, processState.naturalWidth);
-  processCropCanvas.height = Math.max(1, processState.naturalHeight);
-  processCropContext.clearRect(0, 0, processCropCanvas.width, processCropCanvas.height);
+function getProcessCropViewport() {
+  if (processState.cropDrag?.viewport) return processState.cropDrag.viewport;
 
-  if (!enabled) return;
+  const sourceWidth = Math.max(1, processState.naturalWidth);
+  const sourceHeight = Math.max(1, processState.naturalHeight);
+  if (!processExpandInput.checked) {
+    return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+  }
 
   const { x, y, width, height } = processState.cropRect;
-  processCropContext.save();
-  processCropContext.fillStyle = "rgba(15, 23, 42, 0.42)";
-  processCropContext.fillRect(0, 0, processCropCanvas.width, processCropCanvas.height);
-  processCropContext.clearRect(x, y, width, height);
-  processCropContext.strokeStyle = "rgb(79, 70, 229)";
-  processCropContext.lineWidth = Math.max(2, Math.round(processCropCanvas.width / 360));
-  processCropContext.strokeRect(x, y, width, height);
+  const padding = Math.max(24, Math.round(Math.max(sourceWidth, sourceHeight) * 0.12));
+  const left = Math.min(0, x) - padding;
+  const top = Math.min(0, y) - padding;
+  const right = Math.max(sourceWidth, x + width) + padding;
+  const bottom = Math.max(sourceHeight, y + height) + padding;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
 
-  const handleSize = Math.max(8, Math.round(Math.min(processCropCanvas.width, processCropCanvas.height) / 28));
+function drawTransparencyGrid(width, height) {
+  const cellSize = Math.max(8, Math.round(Math.max(width, height) / 80));
+  processCropContext.fillStyle = "#f8fafc";
+  processCropContext.fillRect(0, 0, width, height);
+  processCropContext.fillStyle = "#e2e8f0";
+  for (let y = 0; y < height; y += cellSize) {
+    for (let x = 0; x < width; x += cellSize) {
+      if ((Math.floor(x / cellSize) + Math.floor(y / cellSize)) % 2 === 0) {
+        processCropContext.fillRect(x, y, cellSize, cellSize);
+      }
+    }
+  }
+}
+
+function drawProcessCropOverlay() {
+  const enabled = processCropInput.checked && processState.naturalWidth > 0 && processState.naturalHeight > 0;
+  if (!enabled) return;
+
+  const viewport = getProcessCropViewport();
+  processState.cropViewport = viewport;
+  const previewScale = Math.min(
+    1,
+    maxProcessPreviewDimension / viewport.width,
+    maxProcessPreviewDimension / viewport.height,
+  );
+  processCropCanvas.width = Math.max(1, Math.round(viewport.width * previewScale));
+  processCropCanvas.height = Math.max(1, Math.round(viewport.height * previewScale));
+  processCropContext.clearRect(0, 0, processCropCanvas.width, processCropCanvas.height);
+  processCropContext.save();
+  processCropContext.scale(previewScale, previewScale);
+  drawTransparencyGrid(viewport.width, viewport.height);
+  if (processState.sourceImage) {
+    processCropContext.drawImage(processState.sourceImage, -viewport.x, -viewport.y);
+  }
+
+  const { x, y, width, height } = processState.cropRect;
+  const selectionX = x - viewport.x;
+  const selectionY = y - viewport.y;
+  processCropContext.fillStyle = "rgba(15, 23, 42, 0.42)";
+  processCropContext.fillRect(0, 0, viewport.width, Math.max(0, selectionY));
+  processCropContext.fillRect(0, selectionY + height, viewport.width, viewport.height - selectionY - height);
+  processCropContext.fillRect(0, selectionY, Math.max(0, selectionX), height);
+  processCropContext.fillRect(selectionX + width, selectionY, viewport.width - selectionX - width, height);
+  processCropContext.strokeStyle = "rgb(79, 70, 229)";
+  processCropContext.lineWidth = Math.max(2, Math.round(viewport.width / 360));
+  processCropContext.strokeRect(selectionX, selectionY, width, height);
+
+  const handleSize = Math.max(8, Math.round(Math.min(viewport.width, viewport.height) / 28));
   processCropContext.fillStyle = "rgb(79, 70, 229)";
   [
-    [x, y],
-    [x + width, y],
-    [x, y + height],
-    [x + width, y + height],
+    [selectionX, selectionY],
+    [selectionX + width, selectionY],
+    [selectionX, selectionY + height],
+    [selectionX + width, selectionY + height],
   ].forEach(([handleX, handleY]) => {
     processCropContext.fillRect(handleX - handleSize / 2, handleY - handleSize / 2, handleSize, handleSize);
   });
@@ -545,15 +612,16 @@ function drawProcessCropOverlay() {
 
 function getProcessCropPoint(event) {
   const bounds = processCropCanvas.getBoundingClientRect();
+  const viewport = processState.cropViewport || { x: 0, y: 0, width: 1, height: 1 };
   return {
-    x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * processCropCanvas.width,
-    y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * processCropCanvas.height,
+    x: viewport.x + ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * viewport.width,
+    y: viewport.y + ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * viewport.height,
   };
 }
 
 function hitTestProcessCrop(point) {
   const { x, y, width, height } = processState.cropRect;
-  const scale = processCropCanvas.width / Math.max(1, processCropCanvas.getBoundingClientRect().width);
+  const scale = processState.cropViewport.width / Math.max(1, processCropCanvas.getBoundingClientRect().width);
   const handle = 14 * scale;
   const hits = [
     ["nw", x, y],
@@ -643,6 +711,7 @@ function handleProcessFiles(files) {
   processState.file = file;
   processState.naturalWidth = 0;
   processState.naturalHeight = 0;
+  processState.sourceImage = null;
   processState.aspectRatio = 1;
   processState.cropRect = { x: 0, y: 0, width: 0, height: 0 };
   processState.cropDrag = null;
@@ -662,6 +731,7 @@ function handleProcessFiles(files) {
 
   const image = new Image();
   image.onload = () => {
+    processState.sourceImage = image;
     processState.naturalWidth = image.naturalWidth;
     processState.naturalHeight = image.naturalHeight;
     processState.aspectRatio = image.naturalWidth / image.naturalHeight;
@@ -693,6 +763,7 @@ async function processImage() {
   form.append("crop_y", processCropYInput.value || "0");
   form.append("crop_width", processCropWidthInput.value || "0");
   form.append("crop_height", processCropHeightInput.value || "0");
+  form.append("expand_enabled", processExpandInput.checked ? "true" : "false");
   form.append("resize_enabled", processResizeInput.checked ? "true" : "false");
   form.append("target_width", processWidthInput.value || "0");
   form.append("target_height", processHeightInput.value || "0");
@@ -703,7 +774,7 @@ async function processImage() {
   processButton.disabled = true;
   processButton.textContent = "处理中...";
   processStatus.textContent = "处理中";
-  setFeedback(processFeedback, "正在压缩并生成 PNG。");
+  setFeedback(processFeedback, processExpandInput.checked ? "正在扩展透明画布并生成 PNG。" : "正在压缩并生成 PNG。");
 
   try {
     const response = await fetch("/api/process-image", {
@@ -739,9 +810,14 @@ async function processImage() {
     const sourceBytes = Number(response.headers.get("X-Source-Bytes") || processState.file.size);
     const outputBytes = Number(response.headers.get("X-Output-Bytes") || blob.size);
     const saved = sourceBytes > 0 ? Math.max(0, 100 - (outputBytes / sourceBytes) * 100) : 0;
+    const expanded = response.headers.get("X-Expanded") === "1";
     processOutputMetrics.textContent = `${outputWidth}x${outputHeight}，${formatBytes(outputBytes)}`;
     processStatus.textContent = "完成";
-    setFeedback(processFeedback, `完成，体积减少 ${saved.toFixed(1)}%。`, "success");
+    setFeedback(
+      processFeedback,
+      expanded ? `扩图完成，透明区域已补齐，输出 ${outputWidth}x${outputHeight}。` : `完成，体积减少 ${saved.toFixed(1)}%。`,
+      "success",
+    );
   } catch (error) {
     processStatus.textContent = "失败";
     setFeedback(processFeedback, error.message, "error");
@@ -2228,8 +2304,25 @@ processCropInput.addEventListener("change", () => {
   if (processCropInput.checked && processState.cropRect.width <= 0) {
     setDefaultProcessCrop();
   }
+  if (!processCropInput.checked) {
+    processExpandInput.checked = false;
+  }
   updateProcessCropControls();
   resetProcessedResult();
+});
+processExpandInput.addEventListener("change", () => {
+  if (processExpandInput.checked) {
+    processCropInput.checked = true;
+  }
+  processState.cropRect = clampProcessCropRect(processState.cropRect);
+  updateProcessCropControls();
+  resetProcessedResult();
+  setFeedback(
+    processFeedback,
+    processExpandInput.checked
+      ? "扩图已开启：拖动四角扩大选区，超出原图的部分将补成透明区域。"
+      : "扩图已关闭，选区已限制在原图范围内。",
+  );
 });
 [processCropXInput, processCropYInput, processCropWidthInput, processCropHeightInput].forEach((input) => {
   input.addEventListener("input", () => {
@@ -2253,6 +2346,7 @@ processCropCanvas.addEventListener("pointerdown", (event) => {
     mode: hitTestProcessCrop(start),
     start,
     original: { ...processState.cropRect },
+    viewport: { ...processState.cropViewport },
   };
   processCropCanvas.setPointerCapture(event.pointerId);
 });
@@ -2267,6 +2361,7 @@ processCropCanvas.addEventListener("pointermove", (event) => {
       processCropCanvas.releasePointerCapture(event.pointerId);
     }
     processState.cropDrag = null;
+    drawProcessCropOverlay();
   });
 });
 window.addEventListener("resize", () => {

@@ -61,6 +61,8 @@ AUDIO_MEDIA_TYPES = {
     ".opus": "audio/opus",
 }
 FFMPEG_TIMEOUT_SECONDS = 120
+MAX_IMAGE_OUTPUT_DIMENSION = 16384
+MAX_IMAGE_OUTPUT_PIXELS = 100_000_000
 
 app = FastAPI(title="PNG Tools Web")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -102,15 +104,26 @@ def _crop_box(
     crop_y: int,
     crop_width: int,
     crop_height: int,
+    allow_outside: bool = False,
 ) -> tuple[int, int, int, int]:
     if crop_width <= 0 or crop_height <= 0:
         raise ValueError("crop width and height are required")
-    if crop_x < 0 or crop_y < 0:
-        raise ValueError("crop x and y must be greater than or equal to 0")
-    if crop_x + crop_width > source_width or crop_y + crop_height > source_height:
-        raise ValueError("crop box must stay inside the image")
+    crop_right = crop_x + crop_width
+    crop_bottom = crop_y + crop_height
+    if allow_outside:
+        if crop_width > MAX_IMAGE_OUTPUT_DIMENSION or crop_height > MAX_IMAGE_OUTPUT_DIMENSION:
+            raise ValueError(f"expanded width and height must not exceed {MAX_IMAGE_OUTPUT_DIMENSION}")
+        if crop_width * crop_height > MAX_IMAGE_OUTPUT_PIXELS:
+            raise ValueError("expanded image is too large")
+        if crop_right <= 0 or crop_bottom <= 0 or crop_x >= source_width or crop_y >= source_height:
+            raise ValueError("expanded crop box must overlap the source image")
+    else:
+        if crop_x < 0 or crop_y < 0:
+            raise ValueError("crop x and y must be greater than or equal to 0")
+        if crop_right > source_width or crop_bottom > source_height:
+            raise ValueError("crop box must stay inside the image")
 
-    return crop_x, crop_y, crop_x + crop_width, crop_y + crop_height
+    return crop_x, crop_y, crop_right, crop_bottom
 
 
 def process_image_bytes(
@@ -121,6 +134,7 @@ def process_image_bytes(
     crop_y: int = 0,
     crop_width: int = 0,
     crop_height: int = 0,
+    expand_enabled: bool = False,
     resize_enabled: bool,
     target_width: int,
     target_height: int,
@@ -139,7 +153,7 @@ def process_image_bytes(
     result = source
     applied_crop = (0, 0, source_width, source_height)
 
-    if crop_enabled:
+    if crop_enabled or expand_enabled:
         applied_crop = _crop_box(
             source_width,
             source_height,
@@ -147,6 +161,7 @@ def process_image_bytes(
             crop_y,
             crop_width,
             crop_height,
+            allow_outside=expand_enabled,
         )
         result = source.crop(applied_crop)
 
@@ -182,6 +197,12 @@ def process_image_bytes(
         "crop_y": str(applied_crop[1]),
         "crop_width": str(applied_crop[2] - applied_crop[0]),
         "crop_height": str(applied_crop[3] - applied_crop[1]),
+        "expanded": "1" if (
+            applied_crop[0] < 0
+            or applied_crop[1] < 0
+            or applied_crop[2] > source_width
+            or applied_crop[3] > source_height
+        ) else "0",
         "source_bytes": str(len(raw)),
         "output_bytes": str(len(processed)),
         "palette_colors": str(palette_colors if compress_enabled and png_mode == "palette" else 0),
@@ -625,6 +646,7 @@ async def process_image(
     crop_y: int = Form(0),
     crop_width: int = Form(0),
     crop_height: int = Form(0),
+    expand_enabled: bool = Form(False),
     resize_enabled: bool = Form(False),
     target_width: int = Form(0),
     target_height: int = Form(0),
@@ -646,6 +668,7 @@ async def process_image(
             crop_y=crop_y,
             crop_width=crop_width,
             crop_height=crop_height,
+            expand_enabled=expand_enabled,
             resize_enabled=resize_enabled,
             target_width=target_width,
             target_height=target_height,
@@ -669,6 +692,7 @@ async def process_image(
             "X-Crop-Y": metadata["crop_y"],
             "X-Crop-Width": metadata["crop_width"],
             "X-Crop-Height": metadata["crop_height"],
+            "X-Expanded": metadata["expanded"],
             "X-Source-Bytes": metadata["source_bytes"],
             "X-Output-Bytes": metadata["output_bytes"],
             "X-Palette-Colors": metadata["palette_colors"],

@@ -63,7 +63,7 @@
               <h1 class="text-2xl font-semibold tracking-normal text-slate-950 sm:text-3xl">游戏素材工作台</h1>
             </div>
             <p class="hidden max-w-2xl text-sm leading-6 text-slate-600 sm:block">
-              本地上传，本地处理。快速完成透明底抠除、sprite sheet 检查、视频截帧、原格式音频裁剪和 PNG 压缩。
+              本地上传，本地处理。快速完成透明底抠除、sprite sheet 检查、视频截帧、原格式音频裁剪、PNG 压缩与扩图。
             </p>
           </div>
           <nav class="-mx-1 overflow-x-auto pb-1" aria-label="工具导航">
@@ -72,7 +72,7 @@
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-sprite" data-nav-link>序列帧预览</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-video" data-nav-link>视频转帧</a>
               <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-audio" data-nav-link>音频裁剪</a>
-              <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-process" data-nav-link>压缩 / 裁剪</a>
+              <a class="nav-link inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus:outline focus:outline-4 focus:outline-indigo-100" href="#tool-process" data-nav-link>压缩 / 裁剪 / 扩图</a>
             </div>
           </nav>
         </div>
@@ -534,7 +534,7 @@
             <div class="flex items-start justify-between gap-4">
               <div class="space-y-2">
                 <p class="text-xs font-bold uppercase tracking-normal text-indigo-700">Tool 05</p>
-                <h2 id="process-title" class="text-2xl font-semibold tracking-normal text-slate-950">图片压缩 / 裁剪 / 调整尺寸</h2>
+                <h2 id="process-title" class="text-2xl font-semibold tracking-normal text-slate-950">图片压缩 / 裁剪 / 扩图 / 调整尺寸</h2>
               </div>
               <span id="processStatus" class="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700">待上传</span>
             </div>
@@ -575,7 +575,15 @@
                 <input id="processCropInput" class="mt-1 h-5 w-5 accent-indigo-600" type="checkbox">
                 <span>
                   <strong class="block text-sm font-bold text-slate-950">裁剪图片</strong>
-                  <small class="mt-1 block text-xs leading-5 text-slate-500">开启后拖动原图选区，或手动输入裁剪坐标。</small>
+                  <small class="mt-1 block text-xs leading-5 text-slate-500">开启后拖动预览选区，或手动输入裁剪坐标。</small>
+                </span>
+              </label>
+
+              <label class="grid cursor-pointer grid-cols-[1.5rem_minmax(0,1fr)] gap-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 hover:bg-white/80 sm:col-span-2">
+                <input id="processExpandInput" class="mt-1 h-5 w-5 accent-indigo-600" type="checkbox" disabled>
+                <span>
+                  <strong class="block text-sm font-bold text-slate-950">扩图（透明画布）</strong>
+                  <small class="mt-1 block text-xs leading-5 text-slate-500">复用裁剪选区并允许超出原图；超出的区域以透明像素补齐。X / Y 可输入负数。</small>
                 </span>
               </label>
 
@@ -590,11 +598,11 @@
                 </label>
                 <label class="grid gap-2 text-sm font-medium text-slate-600">
                   <span>裁剪宽度</span>
-                  <input id="processCropWidthInput" class="min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-950 shadow-sm outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400" type="number" min="1" disabled>
+                  <input id="processCropWidthInput" class="min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-950 shadow-sm outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400" type="number" min="1" max="16384" disabled>
                 </label>
                 <label class="grid gap-2 text-sm font-medium text-slate-600">
                   <span>裁剪高度</span>
-                  <input id="processCropHeightInput" class="min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-950 shadow-sm outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400" type="number" min="1" disabled>
+                  <input id="processCropHeightInput" class="min-h-11 rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-950 shadow-sm outline-none transition-all duration-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100 disabled:text-slate-400" type="number" min="1" max="16384" disabled>
                 </label>
                 <button id="resetProcessCropButton" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition-all duration-200 hover:bg-white focus:outline focus:outline-4 focus:outline-indigo-200 disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-4" type="button" disabled>重置为整张图</button>
               </div>
@@ -650,7 +658,7 @@
               <div class="grid min-h-80 place-items-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 p-4">
                 <div id="processCropFrame" class="relative inline-block max-h-80 max-w-full">
                   <img id="processSourcePreview" class="hidden max-h-80 max-w-full object-contain" alt="待处理图片预览">
-                  <canvas id="processCropCanvas" class="absolute inset-0 hidden h-full w-full touch-none cursor-crosshair" width="1" height="1" aria-label="裁剪选区"></canvas>
+                  <canvas id="processCropCanvas" class="hidden max-h-80 max-w-full touch-none cursor-crosshair" width="1" height="1" aria-label="裁剪与扩图选区"></canvas>
                 </div>
               </div>
             </figure>
@@ -665,6 +673,6 @@
       </main>
     </div>
 
-    <script src="/static/app.js?v=20260716-audio-editor" defer></script>
+    <script src="/static/app.js?v=20260718-image-expand" defer></script>
   </body>
 </html>

@@ -31,7 +31,7 @@ http://192.168.113.225:8000/
 .venv/bin/python -m uvicorn web_app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-网页支持上传图片一键去背景、裁剪 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet。音频工具支持 MP3、WAV、FLAC、M4A、AAC、OGG、OPUS，上传后可查看音量波形、裁剪片段，并以原始格式导出。
+网页支持上传图片一键去背景、裁剪 / 扩图 / 压缩 / 调整图片尺寸、上传 sprite sheet 预览序列帧动画，也支持在浏览器本地上传视频、选择片段并生成 sprite sheet。扩图沿用裁剪选区，超出原图的区域会补成透明像素。音频工具支持 MP3、WAV、FLAC、M4A、AAC、OGG、OPUS，上传后可查看音量波形、裁剪片段，并以原始格式导出。
 
 处理默认目录：
 
@@ -110,7 +110,7 @@ curl -X POST http://127.0.0.1:8000/api/remove-background/batch \
   --output output/transparent-images.zip
 ```
 
-裁剪、压缩或调整尺寸接口：
+裁剪、扩图、压缩或调整尺寸接口：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/process-image \
@@ -125,6 +125,8 @@ curl -X POST http://127.0.0.1:8000/api/process-image \
   -F "palette_colors=256" \
   --output output/example-processed.png
 ```
+
+扩图时在 `/api/process-image` 请求中增加 `expand_enabled=true`，并使用负数 `crop_x` / `crop_y` 或大于原图的裁剪宽高；超出原图的部分输出为透明像素。
 
 音频裁剪接口会保留上传文件的格式（MP3、WAV、FLAC、M4A、AAC、OGG、OGA 或 OPUS）：
 
